@@ -113,7 +113,7 @@ func TestPerimeter_RateLimitSwitchEndToEnd(t *testing.T) {
 			gcpd := mod("gcpd", func(r *module.Registrar) error {
 				r.MountLegacy(httpapi.LegacyMount{
 					Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("Gordon")) }),
-					Auth:    httpapi.LegacyAuthGin,
+					Auth:    httpapi.LegacyAuthCore,
 					Routes: func(yield func(httpapi.LegacyRoute) bool) {
 						yield(httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/api/v1/cases/:id", Perm: rbac.AnyAuthenticated, RateClass: httpapi.RateDefault})
 					},
@@ -121,7 +121,6 @@ func TestPerimeter_RateLimitSwitchEndToEnd(t *testing.T) {
 				return nil
 			}).with(func(m *module.Manifest) { m.LegacyPrefixes = []string{"/api/v1/"} })
 			c := supervised(t, rec, gcpd)
-			c.LegacyAuthGinUntil = "gcpd"
 			withCore(&c, "core.http.rate_limit.enabled", strconv.FormatBool(enabled), "core.http.rate_limit.per_minute", "1")
 			var served atomic.Pointer[http.Handler]
 			c.Listen = func(_ httpapi.ListenOptions, h http.Handler, _ *slog.Logger) (Server, error) {
@@ -168,7 +167,7 @@ func echoClientMount() testModule {
 				addr, attributed := httpapi.ClientAddrFrom(req.Context())
 				_, _ = w.Write([]byte(addr.String() + " " + strconv.FormatBool(attributed)))
 			}),
-			Auth: httpapi.LegacyAuthGin,
+			Auth: httpapi.LegacyAuthCore,
 			Routes: func(yield func(httpapi.LegacyRoute) bool) {
 				yield(httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/api/v1/cases/:id", Perm: rbac.AnyAuthenticated, RateClass: httpapi.RateExempt})
 			},
@@ -187,7 +186,6 @@ func TestPerimeter_BadTrustedProxyIsLoggedAndLeftOut(t *testing.T) {
 		capture := logcapture.New(t)
 		c := supervised(t, rec, echoClientMount())
 		c.Logger = capture.Logger()
-		c.LegacyAuthGinUntil = "gcpd"
 		withCore(&c, "core.http.trusted_proxies", `["arkham-asylum","192.0.2.10"]`, "core.http.client_ip_header", "CF-Connecting-IP")
 		var served atomic.Pointer[http.Handler]
 		c.Listen = func(_ httpapi.ListenOptions, h http.Handler, _ *slog.Logger) (Server, error) {

@@ -25,16 +25,16 @@ beforeEach(() => vi.resetAllMocks());
 
 describe('useCanOrganizeLibrary', () => {
   it('is true only with library.organize when auth is on', () => {
-    auth({ permissions: ['library.organize'] });
+    auth({ permissions: ['books:organize'] });
     expect(renderHook(() => useCanOrganizeLibrary()).result.current).toBe(true);
-    auth({ permissions: ['library.view', 'library.edit_metadata'] });
+    auth({ permissions: ['books:view', 'books:edit'] });
     expect(renderHook(() => useCanOrganizeLibrary()).result.current).toBe(false);
   });
 
   it('fails closed outside a provider, before auth initialises, with the auth setting unknown, and signed out', () => {
     mockAuth.mockReturnValue(null);
     expect(renderHook(() => useCanOrganizeLibrary()).result.current).toBe(false);
-    auth({ initialized: false, permissions: ['library.organize'] });
+    auth({ initialized: false, permissions: ['books:organize'] });
     expect(renderHook(() => useCanOrganizeLibrary()).result.current).toBe(false);
     auth({ authEnabled: null, permissions: [] });
     expect(renderHook(() => useCanOrganizeLibrary()).result.current).toBe(false);

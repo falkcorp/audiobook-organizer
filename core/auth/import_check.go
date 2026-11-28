@@ -40,8 +40,9 @@ func importableStatus(st UserStatus) bool {
 }
 
 // CheckImportUser is Importer.ImportUser's rule for u and its stored hash: an
-// ID and a username, a known status, and a hash that is argon2id or bcrypt
-// (or empty: an account without a password).
+// ID and a username, a known status, a hash that is argon2id or bcrypt (or
+// empty: an account without a password), and, for an account marked merged into
+// another (User.MergedInto), status disabled and a target that is not itself.
 func CheckImportUser(u *User, passwordHash string) error {
 	if u == nil || u.ID == "" || strings.TrimSpace(u.Username) == "" {
 		return importReject("a user needs an ID and a username")
@@ -54,6 +55,17 @@ func CheckImportUser(u *User, passwordHash string) error {
 			return importReject("user %s: password hash is not argon2id or bcrypt", u.ID)
 		}
 	}
+	if u.MergedInto != "" {
+		// A merged-away account stays disabled for good (SetStatus refuses to
+		// enable it): an import that holds one active, or merged into itself,
+		// would hand the store a state no merge writes.
+		if u.MergedInto == u.ID {
+			return importReject("user %s is marked merged into itself", u.ID)
+		}
+		if u.Status != StatusDisabled {
+			return importReject("user %s is marked merged into %s but has status %q, not disabled", u.ID, u.MergedInto, u.Status)
+		}
+	}
 	return nil
 }
 
@@ -61,7 +73,8 @@ func CheckImportUser(u *User, passwordHash string) error {
 // its raw value: an ID, at least one parseable concrete scope, a known status,
 // a token hash, and an expiry unless the key is revoked (a key whose RevokedAt
 // is set counts as revoked whatever its Status says: early fix 3's most
-// restrictive reading).
+// restrictive reading), and a description CheckKeyDescription accepts (an
+// over-long one, or one with a control character, is refused, never cut).
 func CheckImportAPIKey(k *APIKey, tokenSHA256 [32]byte) error {
 	if k == nil || k.ID == "" {
 		return importReject("a key needs an ID")
@@ -83,6 +96,12 @@ func CheckImportAPIKey(k *APIKey, tokenSHA256 [32]byte) error {
 	revoked := k.Status == KeyRevoked || !k.RevokedAt.IsZero()
 	if !revoked && k.ExpiresAt.IsZero() {
 		return importReject("apikey %s has no expiry", k.ID)
+	}
+	// A description that breaks CheckKeyDescription is refused, never
+	// shortened or cleaned: the owner tells keys apart by it. The text names
+	// the key by ID and the reason by a fixed class, never the description.
+	if err := CheckKeyDescription(k.Description); err != nil {
+		return importReject("apikey %s: %v", k.ID, err)
 	}
 	return nil
 }

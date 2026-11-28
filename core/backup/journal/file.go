@@ -28,7 +28,7 @@ const Owner storage.Owner = "core/backup"
 // The c/backup/ keys of this package (05-backup §5B.3.6), relative to the
 // keyspace and written as the spec names them. restore_hooked/<seq> (a
 // hook run's completion record), journal_unapplied/<seq> (the queue of lines this
-// build could not apply) and restore_run are the kernel's writers; they are
+// build could not apply), restore_run and restore_report (the hooks' report, restorereport.go) are the kernel's writers; they are
 // declared here because StorageSpec carries them.
 const (
 	headKey       = "journal_head"    // Serialized: Head {seq, mac}, staged by Append through GetForUpdate
@@ -47,7 +47,7 @@ const (
 // identity flip (COR5-6; 06 §6.4.10 F4 row): a keyspace whose journal_head and
 // served_boot are Serialized, so every write of either carries an Expect, and
 // whose other families, journal_gap/<since>, restore_hooked/<seq>,
-// journal_unapplied/<seq> and restore_run, are plain writes. No migration: the
+// journal_unapplied/<seq>, restore_run and restore_report, are plain writes. No migration: the
 // keyspace is new in R2.
 func StorageSpec() storage.Spec {
 	return storage.Spec{Keyspace: true, Serialized: []string{headKey, servedBootKey}}

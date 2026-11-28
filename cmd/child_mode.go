@@ -121,7 +121,11 @@ func RunOperationRunner() {
 	// count against an in-memory zero and bypass the shared quota.
 	server.AttachGoogleBooksBudgetStore(store)
 
-	srv := newServer(store)
+	srv, err := newServer(store)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "child mode: newServer: %v\n", err)
+		os.Exit(2)
+	}
 	reg := srv.OpRegistry()
 	if reg == nil {
 		fmt.Fprintln(os.Stderr, "child mode: server has no opRegistry")

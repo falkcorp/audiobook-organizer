@@ -132,10 +132,16 @@ func Extension(c ExtensionConfig) (coreauth.Extension, error) {
 	}
 	return coreauth.Extension{
 		Authenticator: &extension{c: c},
+		// HEAD's cf_access (internal/auth/context.go): a verified Access
+		// sign-in resolved to an allow-listed person is interactive and may
+		// change credentials, so HEAD's credGuard admitted it on every
+		// credential route and the owner routes (F4-08 B10y). A service token
+		// names no person and never reaches a principal (authenticate).
 		Spec: coreauth.MethodSpec{
-			Method:        coreauth.Method("ext:" + ExtensionName),
-			Interactive:   true,
-			OwnerVerifier: true,
+			Method:               coreauth.Method("ext:" + ExtensionName),
+			Interactive:          true,
+			MayChangeCredentials: true,
+			OwnerVerifier:        true,
 		},
 		Order:    OrderCFAccess,
 		OwnerSet: func() bool { return strings.TrimSpace(c.OwnerEmail()) != "" },
@@ -212,7 +218,11 @@ func (e *extension) authenticate(r *http.Request, raw string, fromHeader bool) (
 	switch {
 	case errors.Is(err, ErrKeysUnavailable):
 		return nil, fmt.Errorf("%w: cloudflare access keys", coreauth.ErrExtensionUnavailable)
-	case errors.Is(err, ErrNonIdentityAssertion):
+	case errors.Is(err, ErrNonIdentityAssertion), errors.Is(err, ErrNotConfigured):
+		// A service token names no person; an unconfigured Access (LateVerifier
+		// before it is bound, or an app with Access off) verifies nothing, as
+		// HEAD's binder ignored a header it had no verifier for. Either way
+		// nothing is granted and the request goes on to the next method.
 		return nil, coreauth.ErrNoCredential
 	case err != nil:
 		// The class only: the library's text can quote the token's claims.

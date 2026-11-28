@@ -234,7 +234,7 @@ func TestBackupProbe_OnTheRegistry(t *testing.T) {
 		{Token: journal.HealthQueued, Severity: journal.SeverityInfo, Detail: "1 line"},
 	}
 	var rep hookReport
-	probe := backupProbe(func() []journal.Health { return jh }, func() hookReport { return rep })
+	probe := backupProbe(func() []journal.Health { return jh }, func(context.Context) (hookReport, error) { return rep, nil })
 	reg := health.NewRegistry()
 	if _, err := registerCoreComponents(reg, coreComponentSources{Backup: probe}); err != nil {
 		t.Fatal(err)

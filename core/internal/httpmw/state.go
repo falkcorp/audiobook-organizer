@@ -30,6 +30,7 @@ type State struct {
 	start           time.Time // the chain's entry: the access record's duration
 	client          netip.Addr
 	attributed      bool
+	trustedPeer     bool // the TCP peer is in the trusted-proxy set (stage 0), whether or not a client-IP header named a client
 	requestID       string
 	clientRequestID string
 
@@ -113,6 +114,16 @@ func ClientAddr(ctx context.Context) (netip.Addr, bool) {
 		return netip.Addr{}, false
 	}
 	return st.client, st.attributed
+}
+
+// PeerTrusted reports whether stage 0 found the request's TCP peer in the
+// trusted-proxy set (core.http.trusted_proxies). It is true whether or not the
+// peer sent a usable client-IP header, which ClientAddr's attributed flag is
+// not: auth's loopback exceptions need "this connection came through a proxy",
+// not "this proxy named a client". false outside a request stage 0 saw.
+func PeerTrusted(ctx context.Context) bool {
+	st := From(ctx)
+	return st != nil && st.trustedPeer
 }
 
 // RequestID returns the request ID stage 1 assigned, "" outside a request

@@ -15,11 +15,19 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // UndoRequest names the journal to reverse.
 type UndoRequest struct {
 	JournalID string
+	// ActorID and Principal are the acting admin and the principal the request
+	// that minted the grant held (identity only; see ApplyRequest.Principal): the
+	// undo of an identity-era merge acts as this admin, re-validated through core,
+	// and a request with none is refused. HEAD's undo reads neither. Not
+	// serialized and not logged.
+	ActorID   string
+	Principal *coreauth.Principal
 }
 
 // mergeLockedStatus is the status Apply leaves the absorbed account in.
@@ -72,6 +80,12 @@ func invert(op database.UserMergeOp) database.UserMergeOp {
 func (s *Service) Undo(ctx context.Context, req UndoRequest, prog Progress) (*Journal, error) {
 	runMu.Lock()
 	defer runMu.Unlock()
+	if s.flipped() {
+		// Under identity a journal with a core half is undone in one batch with
+		// core's StageUserUnmerge (undoIdentity); one without (written before the
+		// flip) stays permanent.
+		return s.undoIdentity(ctx, req, prog)
+	}
 	j, err := s.LoadJournal(req.JournalID)
 	if err != nil {
 		return nil, err

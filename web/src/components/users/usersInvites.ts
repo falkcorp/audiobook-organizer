@@ -23,9 +23,13 @@ export interface AcceptedInvite {
   displaced_user_ids?: string[];
 }
 
-/** The link an invitee opens; the page is served from this same origin. */
+/**
+ * The link an invitee opens; the page is served from this same origin. The token rides in the
+ * URL fragment (core's link form, 07 section 7.4.3): the SPA serves only /invite#token=..., never
+ * the old /invite/:token path.
+ */
 export function inviteLink(token: string): string {
-  return `${window.location.origin}/invite/${token}`;
+  return `${window.location.origin}/invite#token=${token}`;
 }
 
 /**

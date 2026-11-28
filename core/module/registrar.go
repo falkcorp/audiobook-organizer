@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/events"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/tasks"
@@ -23,18 +24,19 @@ import (
 // goroutine-safe and is closed when Register returns; calls after that record
 // ProblemRegistrarClosed and take no effect. Methods record problems rather
 // than return errors (A4); Err reports them. Nothing recorded here takes
-// effect before P7 (A8). These are the R1 members and Tasks and Resources (F2);
-// Lanes, ChangeSink, Topics, Health and the rest arrive with their packages
-// (06 §6.4.10).
+// effect before P7 (A8). These are the R1 members, Tasks and Resources (F2),
+// and Topics and Subscribe (the identity flip's events surface, recorded
+// only until F4-08's boot wiring reads them); Lanes, ChangeSink, Health and
+// the rest arrive with their packages (06 §6.4.10).
 type Registrar struct {
-	id            ID
-	ctx           context.Context
-	deps          Deps
-	http          *httpapi.Group
-	legacyAuthGin bool
-	settings      map[config.Path]any
+	id       ID
+	ctx      context.Context
+	deps     Deps
+	http     *httpapi.Group
+	settings map[config.Path]any
+	compat   func(auth.MethodSpec) auth.Compat
 
-	mu         sync.Mutex // guards closed and problems against a late call from another goroutine
+	mu         sync.Mutex // guards closed, problems and deps.AuthCompat against a late call from another goroutine
 	closed     bool
 	problems   []Problem
 	rec        Registrations
@@ -46,9 +48,6 @@ type RegistrarConfig struct {
 	Context context.Context // derived from app.New's ctx, cancelled when New returns
 	Deps    Deps            // Deps.Module is the module's ID
 	HTTP    *httpapi.Group  // the module's group, httpapi.Router.ModuleGroup(id)
-	// LegacyAuthGin is true for the one module app.Options.LegacyAuthGinUntil
-	// names: only its MountLegacy may use httpapi.LegacyAuthGin (SEC2-17).
-	LegacyAuthGin bool
 	// Settings holds one entry per section the module's Manifest.Settings
 	// declares, keyed by path: the live *config.Handle[T] the kernel
 	// registered at P3, or nil when no live handle exists (app.Describe, a
@@ -58,6 +57,15 @@ type RegistrarConfig struct {
 	// AfterClose, when set, receives each ProblemRegistrarClosed recorded
 	// after Close, which no Err call reads any more: the kernel logs it.
 	AfterClose func(Problem)
+	// Compat returns the auth.Compat handle bound to a method this module
+	// registered with Registrar.AuthMethod (the kernel hands the specs to auth
+	// at P7, so the handle it returns here is late-bound: it refuses until
+	// then). Registrar.Deps().AuthCompat is it for the module's first
+	// registered method from that call on, and nil before it, so the field is
+	// non-nil only for a module that registered one (SEC-1). nil: no module
+	// gets a handle (app.Describe, an app that did not declare the identity
+	// flip).
+	Compat func(auth.MethodSpec) auth.Compat
 }
 
 // Registrations is what one module recorded. Kernel-only: the kernel reads
@@ -74,6 +82,13 @@ type Registrations struct {
 	// at P7 (kernel/tasks.go).
 	Tasks     []tasks.Definition
 	Resources []string
+	// Topics are the catalog entries the module declared and Subscriptions
+	// its bus subscriptions, each in call order (Registrar.Topics,
+	// Registrar.Subscribe). Recorded as declared: the kernel declares the
+	// topics and then the subscriptions on the events bus at P7, which
+	// refuses a bad entry (kernelEvents.declare, kernelEvents.subscribe).
+	Topics        []events.TopicSpec
+	Subscriptions []events.Subscription
 }
 
 // NewRegistrar returns the registrar of one module's Register call.
@@ -84,8 +99,8 @@ func NewRegistrar(c RegistrarConfig) *Registrar {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return &Registrar{id: c.Deps.Module, ctx: ctx, deps: c.Deps, http: c.HTTP, legacyAuthGin: c.LegacyAuthGin,
-		settings: c.Settings, afterClose: c.AfterClose}
+	return &Registrar{id: c.Deps.Module, ctx: ctx, deps: c.Deps, http: c.HTTP,
+		settings: c.Settings, afterClose: c.AfterClose, compat: c.Compat}
 }
 
 // Close ends registration and returns what was recorded. Kernel-only. It is
@@ -105,6 +120,8 @@ func (r *Registrar) Close() Registrations {
 	rec.Workers = slices.Clone(rec.Workers)
 	rec.Tasks = slices.Clone(rec.Tasks)
 	rec.Resources = slices.Clone(rec.Resources)
+	rec.Topics = slices.Clone(rec.Topics)
+	rec.Subscriptions = slices.Clone(rec.Subscriptions)
 	return rec
 }
 
@@ -135,8 +152,15 @@ func (r *Registrar) problem(kind ProblemKind, format string, args ...any) {
 // or returns. Register uses it for its own reads (COR-24).
 func (r *Registrar) Context() context.Context { return r.ctx }
 
-// Deps returns the module-scoped dependency handles. Every field is non-nil.
-func (r *Registrar) Deps() Deps { return r.deps }
+// Deps returns the module-scoped dependency handles (see Deps for which are
+// nil: Config, AuthCompat and, on an app that did not declare the identity
+// flip, Auth, AuthAdmin and Audit). AuthCompat is set by the first AuthMethod
+// call, so a Deps read before it has none.
+func (r *Registrar) Deps() Deps {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.deps
+}
 
 // HTTP returns the module's route group rooted at /api/<ID>/v1 (05-http-api
 // §3.1). Register routes with httpapi.Handle(r.HTTP(), httpapi.Route{...},
@@ -152,18 +176,13 @@ func (r *Registrar) HTTP() *httpapi.Group {
 // Manifest.LegacyPrefixes, behind core's perimeter stages (05-http-api §8.2).
 // m.Owner is set by the registrar. m.ServesSPA lets the mount own the "/"
 // SPA fallback; at most one mount per app may set it (ProblemSPAOwner, P7).
-// m.Auth = httpapi.LegacyAuthGin is accepted only for the module named by
-// app.Options.LegacyAuthGinUntil; any other module records ProblemLegacyAuth
-// (SEC2-17). The manifest half (Routes, OwnAuth) is R1-14's.
+// m.Auth must be httpapi.LegacyAuthCore; any other value records
+// ProblemLegacyAuth (SEC2-17). The manifest half (Routes, OwnAuth) is R1-14's.
 func (r *Registrar) MountLegacy(m httpapi.LegacyMount) {
 	r.record("MountLegacy", func() {
 		m.Owner = string(r.id)
-		if m.Auth != httpapi.LegacyAuthCore && m.Auth != httpapi.LegacyAuthGin {
-			r.problem(ProblemLegacyAuth, "MountLegacy with Auth %d: set httpapi.LegacyAuthCore (or LegacyAuthGin for the module app.Options.LegacyAuthGinUntil names)", m.Auth)
-			return
-		}
-		if m.Auth == httpapi.LegacyAuthGin && !r.legacyAuthGin {
-			r.problem(ProblemLegacyAuth, "MountLegacy with LegacyAuthGin: only the module app.Options.LegacyAuthGinUntil names may skip core authentication; use LegacyAuthCore")
+		if m.Auth != httpapi.LegacyAuthCore {
+			r.problem(ProblemLegacyAuth, "MountLegacy with Auth %d: set httpapi.LegacyAuthCore", m.Auth)
 			return
 		}
 		r.rec.Mounts = append(r.rec.Mounts, m)
@@ -197,6 +216,9 @@ func (r *Registrar) AuthMethod(spec auth.MethodSpec) {
 			return
 		}
 		r.rec.AuthMethods = append(r.rec.AuthMethods, spec)
+		if r.deps.AuthCompat == nil && r.compat != nil {
+			r.deps.AuthCompat = r.compat(spec)
+		}
 	})
 }
 
@@ -296,6 +318,27 @@ func (r *Registrar) Resources(kinds ...string) {
 			}
 		}
 	})
+}
+
+// Topics declares the module's entries in the ONE topic catalog (05-events
+// §5E.3.1, SIMP-5): every bus or durable topic it publishes, with its schema,
+// its read Permission, optional Visible filter and Durable, Notify and
+// Realtime metadata. Build entries with events.NewTopic[T](name).Spec(...) or
+// the outbox topic's Spec. Names are "<ID>.<noun>.<verb-past>.v<N>". It only
+// records (06 §6.5.1 P6): the bus checks every name, permission and schema when
+// the kernel declares the catalog at P7, and notify and realtime read the same
+// catalog.
+func (r *Registrar) Topics(t ...events.TopicSpec) {
+	r.record("Topics", func() { r.rec.Topics = append(r.rec.Topics, t...) })
+}
+
+// Subscribe declares bus subscriptions built with events.On (the module's own
+// topics or core.* topics, typed) or events.OnRaw (another module's topic by
+// name, R3). They are frozen when Register returns and delivery begins at
+// Bus.Open (06 §6.5.2, COR-8). It only records: the bus checks each one at P7,
+// after every topic is declared.
+func (r *Registrar) Subscribe(s ...events.Subscription) {
+	r.record("Subscribe", func() { r.rec.Subscriptions = append(r.rec.Subscriptions, s...) })
 }
 
 // Err returns the problems recorded so far, as a *ValidationError; nil if

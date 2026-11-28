@@ -403,6 +403,19 @@ var userMergeApplyMu sync.Mutex
 
 // ScanUserData implements UserMerger.
 func (p *PebbleStore) ScanUserData(userID string) (*UserData, error) {
+	return p.scanUserData(userID, false)
+}
+
+// ScanBooksUserData is ScanUserData over the families books owns once accounts
+// live in core: listening state, bookmarks, preferences, playback, listen
+// stats, playlists and collections. It never reads sign-ins, API keys, invites
+// or invite grants (core's records; books' claims on them are retired, so a
+// scan would be an out-of-claim access), and leaves those fields empty.
+func (p *PebbleStore) ScanBooksUserData(userID string) (*UserData, error) {
+	return p.scanUserData(userID, true)
+}
+
+func (p *PebbleStore) scanUserData(userID string, booksOnly bool) (*UserData, error) {
 	if userID == "" || strings.Contains(userID, ":") {
 		return nil, fmt.Errorf("user merge: invalid user id %q", userID)
 	}
@@ -453,6 +466,9 @@ func (p *PebbleStore) ScanUserData(userID string) (*UserData, error) {
 		{"idx:oauth:user:" + userID + ":", "oauthid:", &d.OAuthIdentities},
 		{"idx:apikey:user:" + userID + ":", "apikey:", &d.APIKeys},
 	} {
+		if booksOnly {
+			break
+		}
 		var ids []string
 		if err := forEachKeyInRange(p.db, []byte(s.indexPrefix), prefixUpperBound([]byte(s.indexPrefix)), func(k, _ []byte) error {
 			ids = append(ids, strings.TrimPrefix(string(k), s.indexPrefix))
@@ -485,6 +501,9 @@ func (p *PebbleStore) ScanUserData(userID string) (*UserData, error) {
 		{"invite:", "created_by_user_id", &d.Invites},
 		{inviteEmailGrantPrefix, "user_id", &d.InviteGrants},
 	} {
+		if booksOnly && (s.prefix == "invite:" || s.prefix == inviteEmailGrantPrefix) {
+			continue
+		}
 		if err := forEachKeyInRange(p.db, []byte(s.prefix), prefixUpperBound([]byte(s.prefix)), func(k, v []byte) error {
 			owner, err := JSONStringField(v, s.field)
 			if err != nil {

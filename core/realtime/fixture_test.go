@@ -259,9 +259,29 @@ func (e *env) user(name string, roles ...rbac.RoleName) *auth.User {
 	if err := b.Commit(context.Background(), storage.Sync); err != nil {
 		e.t.Fatal(err)
 	}
+	e.svc.NoteUserCreated() // the store was written directly: tell stage 12 a user exists
 	got, err := e.st.GetUser(context.Background(), u.ID)
 	if err != nil {
 		e.t.Fatal(err)
+	}
+	return got
+}
+
+// bound is the principal stage 12 binds for r: the real path, so it carries
+// what auth sealed (a principal built through PrincipalFor and edited is one
+// Refresh refuses, which the hub calls on every beat).
+func (e *env) bound(r *http.Request) *auth.Principal {
+	e.t.Helper()
+	var got *auth.Principal
+	var fail auth.Failure
+	h := e.svc.Middleware()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		got, _ = auth.PrincipalFrom(r.Context())
+		fail, _ = auth.FailureFrom(r.Context())
+	}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if got == nil {
+		e.t.Fatalf("stage 12 bound no principal for %s: status %d, refusal %+v", r.URL, rec.Code, fail)
 	}
 	return got
 }
@@ -274,27 +294,21 @@ func (e *env) session(u *auth.User) *auth.Principal {
 	if err != nil {
 		e.t.Fatalf("IssueSession %s: %v", u.ID, err)
 	}
-	p, err := e.svc.PrincipalFor(context.Background(), u, auth.MethodSession, nil, u.CredentialEpoch)
-	if err != nil {
-		e.t.Fatalf("PrincipalFor %s: %v", u.ID, err)
-	}
-	p.CredentialID = is.PublicID
-	return p
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(&http.Cookie{Name: auth.DefaultSessionCookie, Value: is.Token})
+	return e.bound(r)
 }
 
 // key mints an API key for u naming scopes and returns u's principal for it.
 func (e *env) key(u *auth.User, scopes ...rbac.Permission) (*auth.Principal, *auth.APIKey) {
 	e.t.Helper()
-	_, k, err := e.svc.CreateAPIKey(context.Background(), e.session(u), auth.KeySpec{Name: "batphone", Scopes: scopes})
+	raw, k, err := e.svc.CreateAPIKey(context.Background(), e.session(u), auth.KeySpec{Name: "batphone", Scopes: scopes})
 	if err != nil {
 		e.t.Fatalf("CreateAPIKey %s %v: %v", u.ID, scopes, err)
 	}
-	p, err := e.svc.PrincipalFor(context.Background(), u, auth.MethodAPIKey, k.Scopes, u.CredentialEpoch)
-	if err != nil {
-		e.t.Fatalf("PrincipalFor key %s: %v", u.ID, err)
-	}
-	p.CredentialID = k.ID
-	return p, k
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("Authorization", "Bearer "+raw)
+	return e.bound(r), k
 }
 
 // refresh is the Deps.Refresh the kernel supplies (F6-03): auth's own

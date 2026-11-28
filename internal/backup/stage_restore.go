@@ -17,6 +17,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	corebackup "github.com/falkcorp/mediacore/backup"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
 
@@ -74,9 +75,13 @@ type StageRestoreOptions struct {
 
 // StagedRestore is what StageRestore staged.
 type StagedRestore struct {
-	ID        string // the intent's id: restore/<ID>/ under the state directory
-	Archive   string // the archive's path
-	ArchiveID string // the archive's SHA-256, the intent's archive_id
+	ID      string // the intent's id: restore/<ID>/ under the state directory
+	Archive string // the archive's path
+	// ArchiveID is the archive's SHA-256, the one the legacy manifest records.
+	// The intent's archive_id is the legacy ID core derives from the file's
+	// name (corebackup.LegacyArchiveID), the form its catalogue and its own
+	// staged restore use.
+	ArchiveID string
 	// Verified: the archive was checked against its checksum sidecar. Always
 	// so with Verify; without it, whenever the archive has a sidecar.
 	Verified bool
@@ -102,7 +107,10 @@ type StagedRestore struct {
 //  4. ExtractStore extracts the archive there (its sidecar checked when it
 //     exists); with Verify that check must have run (a sidecar removed
 //     after step 1 refuses with ErrVerificationUnsupported, never an
-//     unverified stage); then VerifyStore opens the result read-only;
+//     unverified stage); then VerifyStore opens the result read-only, and
+//     core's legacy manifest (corebackup.WriteLegacyStaged) is written in
+//     the staging directory beside the store, so the intent names it
+//     (Staging, ManifestSHA256) the way core's own staged restore does;
 //  5. BeforeStage runs (books: the HNSW clean-stop marker goes);
 //  6. the journal directory restore/<id>/ is made and synced, and
 //     restorejournal.CreateIntent links the intent into the slot, the one
@@ -186,10 +194,17 @@ func StageRestore(ctx context.Context, o StageRestoreOptions) (_ StagedRestore, 
 	if err := restorejournal.Validate(probe, moves); err != nil {
 		return StagedRestore{}, err
 	}
-	sum, verified, err := extractStore(ctx, archive, store)
+	x, err := extractStoreRecording(ctx, archive, store)
 	if err != nil {
 		return StagedRestore{}, err
 	}
+	// sum is the SHA-256 the extraction's scan took over the archive's bytes
+	// (scanArchive). It is the digest recorded in the legacy manifest whether or
+	// not Verify was asked: with a sidecar present the scan's digest was checked
+	// against it (checkSidecar) and is the verified one; without one (Verify
+	// false) no other digest was read, so the scan's is the only one there is,
+	// and it is the archive's own SHA-256 either way.
+	sum, verified := x.sum, x.verified
 	if o.Verify && !verified {
 		// The extraction checks a sidecar only if one exists when it reads
 		// it: a sidecar removed since the listing must not turn a verified
@@ -200,7 +215,19 @@ func StageRestore(ctx context.Context, o StageRestoreOptions) (_ StagedRestore, 
 	if err := o.VerifyStore(ctx, store); err != nil {
 		return StagedRestore{}, fmt.Errorf("backup: stage restore: the archive's store does not open: %w", err)
 	}
-	in.ArchiveID = sum
+	// The legacy manifest goes in staging beside the store (never inside it:
+	// the store directory is the one the swap moves onto dbPath), where a boot
+	// under core's identity reads it through ReadStagedManifest to derive the
+	// restore's source (kernel P4d) and where step b's Recheck finds each file
+	// by its recorded path, size and digest. Core owns the format; the
+	// manifest's hash is what the intent must carry. Written before
+	// BeforeStage, so a failure here refuses before the HNSW marker goes.
+	manifestSHA, err := corebackup.WriteLegacyStaged(staging, sum, x.codec, x.entries)
+	if err != nil {
+		return StagedRestore{}, fmt.Errorf("backup: stage restore: %w", err)
+	}
+	in.Staging, in.ManifestSHA256 = staging, manifestSHA
+	in.ArchiveID = string(corebackup.LegacyArchiveID(filepath.Base(archive), sum))
 	if err := ctx.Err(); err != nil {
 		return StagedRestore{}, err
 	}

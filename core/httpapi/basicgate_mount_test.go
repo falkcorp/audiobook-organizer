@@ -36,7 +36,7 @@ func gatedMountRouter(t *testing.T, gate *BasicGateOptions) http.Handler {
 	}
 	r.AllowAuthMethods("gcpd", "gcpd.signal")
 	routes := gcpdBasicRoutes()
-	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(ginRoutesOf(routes)...), Auth: LegacyAuthGin,
+	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(ginRoutesOf(routes)...), Auth: LegacyAuthCore,
 		ServesSPA: true, TopSegments: []string{"ping", "status"}, SPAShared: []string{"login"},
 		BasicExemptAssets: headBasicAssets, BasicGate: gate, Routes: manifestOf(routes...)}); err != nil {
 		t.Fatal(err)
@@ -130,7 +130,7 @@ func TestBuild_BasicGateNeverLogsTheCredentials(t *testing.T) {
 		}
 	}
 	r.AllowAuthMethods("gcpd", "gcpd.signal")
-	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(ginRoutesOf(routes)...), Auth: LegacyAuthGin,
+	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(ginRoutesOf(routes)...), Auth: LegacyAuthCore,
 		ServesSPA: true, TopSegments: []string{"ping", "status"}, SPAShared: []string{"login"},
 		BasicGate: &BasicGateOptions{Settings: settingsOf(true, "bwayne"), Password: gatePW("Wayne-Manor", nil),
 			Realm: headRealm, Log: lg}, Routes: manifestOf(routes...)}); err != nil {
@@ -158,7 +158,7 @@ func TestBuild_BasicGateInputsAreChecked(t *testing.T) {
 			if err := r.Claim(owner, "/"+owner+"/"); err != nil {
 				t.Fatal(err)
 			}
-			if err := r.MountLegacy(LegacyMount{Owner: owner, Handler: newFakeGin(), Auth: LegacyAuthGin,
+			if err := r.MountLegacy(LegacyMount{Owner: owner, Handler: newFakeGin(), Auth: LegacyAuthCore,
 				TopSegments: []string{owner}, BasicGate: g, Routes: manifestOf()}); err != nil {
 				t.Fatal(err)
 			}
@@ -199,7 +199,7 @@ func TestBuild_BasicGateRefusalOfARedirectedPathCarriesTheMountsPolicy(t *testin
 		}
 	}
 	r.AllowAuthMethods("gcpd", "gcpd.signal")
-	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(ginRoutesOf(routes)...), Auth: LegacyAuthGin,
+	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(ginRoutesOf(routes)...), Auth: LegacyAuthCore,
 		ServesSPA: true, TopSegments: []string{"ping", "status"}, SPAShared: []string{"login"},
 		DefaultCSP: func(*http.Request) string { return csp }, BasicExemptAssets: headBasicAssets, Routes: manifestOf(routes...),
 		BasicGate: &BasicGateOptions{Settings: settingsOf(true, "bwayne"), Password: gatePW("Wayne-Manor", nil), Realm: headRealm},

@@ -51,8 +51,11 @@ func TestFromCorePrincipal_Refusals(t *testing.T) {
 	}{
 		"no principal":              {bound(nil, laxChecker{}), nil, ErrUnauthenticated},
 		"a principal with no user":  {bound(noUser, laxChecker{}), nil, ErrUnauthenticated},
-		"an extension method":       {as("ext:cfaccess", laxChecker{}), nil, ErrUnmappedMethod},
-		"a compat surface method":   {as("books.abs", laxChecker{}), nil, ErrUnmappedMethod},
+		"an unlisted extension":     {as("ext:penguin", laxChecker{}), nil, ErrUnmappedMethod},
+		"an unlisted compat method": {as("books.riddler", laxChecker{}), nil, ErrUnmappedMethod},
+		"a prefix of a mapped name": {as("books.ab", laxChecker{}), nil, ErrUnmappedMethod},
+		"a mapped name and a tail":  {as("ext:cfaccess2", laxChecker{}), nil, ErrUnmappedMethod},
+		"the empty method":          {as("", laxChecker{}), nil, ErrUnmappedMethod},
 		"no checker bound":          {bound(principal(coreauth.MethodSession, laxChecker{}), nil), nil, ErrNoChecker},
 		"the lookup fails":          {as(coreauth.MethodSession, laxChecker{}), failingLookup, ErrUnauthenticated},
 		"the lookup finds nobody":   {as(coreauth.MethodSession, laxChecker{}), nilLookup, ErrUnauthenticated},

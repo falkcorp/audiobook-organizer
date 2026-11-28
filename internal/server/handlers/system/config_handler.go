@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	coreconfig "github.com/falkcorp/mediacore/config"
 	"github.com/gin-gonic/gin"
@@ -277,6 +278,15 @@ func (h *Handler) configActor(c *gin.Context, f config.Facade) config.Actor {
 // held when the principal holds an atom whose native scopes include it.
 func (h *Handler) configCan(c *gin.Context) func(string) bool {
 	return func(perm string) bool {
+		// Under core identity (F4-08 B7) every answer is the principal stage 12
+		// bound: core:admin is the permission itself (key scoping applied),
+		// any other is held when the principal holds an atom whose native
+		// scopes include it, and there is no first-run grant: it read books'
+		// own user count, which is not the account record once core owns
+		// identity.
+		if id, bridged := legacyauth.IdentityFrom(c.Request.Context()); bridged {
+			return h.configCanBridged(c, id.Bridge, perm)
+		}
 		if perm == config.FirstRunPerm {
 			return h.configFirstRun != nil && h.configFirstRun()
 		}
@@ -295,6 +305,34 @@ func (h *Handler) configCan(c *gin.Context) func(string) bool {
 		}
 		return false
 	}
+}
+
+// configCanBridged is configCan under core identity. core:admin keeps the
+// legacy branch's whole test, HEAD's admin-role test as every other admin
+// site writes it (handlers/user.go inviteMarkerMayBind): the active caller
+// holds the admin role by name and its credential may act as admin
+// (APIKeyMayActAsAdmin, through the bridge), and under core identity the
+// principal must also hold core:admin (AdminHeld). Holding core:admin alone,
+// as through a custom role granted it after the cutover, is not HEAD's admin
+// (F4-08 B10y, item 5).
+func (h *Handler) configCanBridged(c *gin.Context, b *legacyauth.Bridge, perm string) bool {
+	ctx := c.Request.Context()
+	switch {
+	case perm == config.FirstRunPerm:
+		return false
+	case perm == "core:admin":
+		u, ok := servermiddleware.CurrentUser(c)
+		return ok && u != nil && u.Status == "active" && slices.Contains(u.Roles, "admin") &&
+			servermiddleware.APIKeyMayActAsAdmin(c) && b.AdminHeld(ctx)
+	case h.configAtoms == nil:
+		return false
+	}
+	for _, atom := range h.configAtoms(perm) {
+		if b.Can(ctx, string(atom)) {
+			return true
+		}
+	}
+	return false
 }
 
 // respondConfigUpdateError maps the Facade's error to a status and the JSON

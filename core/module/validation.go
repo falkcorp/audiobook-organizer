@@ -105,7 +105,7 @@ const (
 	ProblemChangeSinkDuplicate
 	ProblemTaskStartUnknown    // Manifest.TaskStarts names a kind that is neither registered nor in any manifest's TaskLedger (SEC2-15, COR3-10)
 	ProblemAuthMethod          // AuthMethod spec interactive, credential-changing, owner-verifying, or not "<ID>.<name>" (SEC2-16)
-	ProblemLegacyAuth          // LegacyAuthGin by a module other than Options.LegacyAuthGinUntil, or OwnAuth without a registered module method (SEC2-17)
+	ProblemLegacyAuth          // a legacy mount not using core auth, or OwnAuth without a registered module method (SEC2-17)
 	ProblemDerivedIndex        // derived index declared without hooks, or hooks for an undeclared index (COR2-15)
 	ProblemSPASegmentCollision // a ui.ReservedSegments() entry is also a NonSPA segment (P8, FE2-7); the ONE name for this check (FE3-9)
 	ProblemImportedRole        // a Manifest.ImportedRoleIDs entry listed by two manifests or equal to a core seed role ID (P1, COR5-5)

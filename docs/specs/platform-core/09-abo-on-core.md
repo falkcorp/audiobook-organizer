@@ -418,24 +418,79 @@ The mechanism is 05-rbac (§6 the migration, §6.1 the table) and 05-http-api §
   13 rows, a key then intersected with its owner's role set, never `core:admin` (05-rbac §6.1; SEC-12). Core seeds the four
   seed roles, and their IDs (`admin`, `editor`, `viewer`, `fp-worker`) are kept, so `User.Roles` and invite role
   references need no rewrite. An atom outside the table maps to nothing, and its role converts and is reported (P2).
+- **Admin-gated routes: owner-approved widening, admin-granted only (2026-11-22).** HEAD's 19 role-name admin
+  routes (the debug reads and edits, cache key listing and invalidate, the guest service tokens, the retired
+  recompact and wipe stubs, and the master lists) are gated by their 05-rbac §6.2 permission alone once the gin
+  gate is unmounted (F4-08 B10g). A custom role that holds exactly that permission is admitted where HEAD's
+  `RequireAdmin` refused anything but the `admin` role. So is a key holding it, except on the four guest-service-token
+  routes (`Guards.Interactive` refuses every key) and the three `books:admin.debug` routes (a Sensitive permission, which
+  no key satisfies). The owner chose this on 2026-11-22 (F4-08 B10rn, STOP 1,
+  option 1: permissions only) over keeping a role-name test. Only an actor who already holds the permission can
+  grant it (05-rbac §4.7 rule 1), so every chain of grants starts at an admin, though a holder who also manages roles
+  or users can pass it on. M3 grants none of them to any seeded or migrated principal but `admin`.
+  - Proved on the flipped build by three cells: `TestReachRegisteredPath_RoleNameRowsScopeGateAdmits` (stage 13
+    admits such a role on all 19 routes and such a key on the 12 that are neither guest-service-token nor debug-write
+    routes, and refuses the key on the four guest-service-token routes; no key is tried on the debug-write routes);
+    `TestReachRegisteredPath_NonAdminCannotGrantAdminScopes` (a role and user manager without the permission cannot
+    put it in a role, a key or a user's roles); and
+    `TestRegisteredHarness_EveryVerdictIsR0sOrNamed` (no seeded or migrated principal changes reach).
+  - Until B10g the bridge still applies the role-name test after the permission (`bridgedAdminGate`), and the
+    allow-list in `internal/server/legacy_manifest_gin_allowlist_test.go` names each route until B10g deletes it.
 - **The reach oracle.** Allow and deny for every gin route (the ABS routes included), every seed and custom role,
   scoped keys and auth-off, computed by the R0 binary on its fixture corpus (with its hand-built overlay, §9.3) and by R2
   on the migrated corpus, are equal except the recorded changes below. The baseline is R0, that is HEAD plus the six
   early fixes, never HEAD itself (SEC-13); the auth-disabled principal is also checked against every core route, not
   only the HEAD router dump. It runs on F4's PR and stays as the table's regression test (05-rbac §12).
 - **Recorded changes (release notes).** With auth off, every `Guards.Interactive` route (credential, key,
-  temp-login and restore routes) refuses the auth-disabled principal, so do the API-key, session-list and audit routes
-  (SEC-3), and the backup routes answer 401. The credential-metadata routes (`/me*`, `/api-keys*`,
-  `/users/{id}/sessions*`, `/users/{id}/api-keys*`) and the audit routes answer 401 too, while the settings routes keep
-  their auth-off reach (05-rbac §4.11): "With authentication off, credential, API-key, session, audit and backup
-  routes now refuse requests; turn authentication on to use them." Playlist writes stay open to every signed-in user,
+  temp-login, restore, user-management, import-path, plugin-settings, tool-install and update routes) refuses the
+  auth-disabled principal, so do the API-key, session-list and audit routes
+  (SEC-3), and the backup routes refuse it too. The credential-metadata routes (`/me*`, `/api-keys*`,
+  `/users/{id}/sessions*`, `/users/{id}/api-keys*`) and the audit routes refuse it as well, while the settings routes keep
+  their auth-off reach (05-rbac §4.11): "With authentication off, credential, API-key, session, audit, backup,
+  user-management, import-path, plugin-settings, tool-install and update routes now refuse requests; turn
+  authentication on to use them." Every such refusal of the auth-disabled principal is 403 (core:
+  `interactive_required`; books' gin routes: `FORBIDDEN`), never 401, so it does not end a no-auth install's SPA
+  session (F4-08 ruling G5(a)); a request with no credential while authentication is on still answers 401. Playlist writes stay open to every signed-in user,
   as at HEAD: `books:playlists.create` is not enforced on them (SEC-4). An API key of an `fp-worker` user whose
   scopes lie outside the worker scope reaches no route (HEAD let it reach the authenticated-only routes). An admin's
   API key, the bootstrap key included, no longer reaches `PATCH /api/v1/admin/debug/books/:id`,
   `PATCH /api/v1/admin/debug/book-files/:id` or `POST /api/v1/admin/debug/edits/:edit_id/undo`; use a signed-in
   admin session. The debug read routes are unchanged. ABO's
   `core.auth.disabled_allow_remote` defaults to `true`, with health Degraded `auth_disabled_remote` (05-rbac
-  §4.10–§4.11).
+  §4.10–§4.11). An API key can now disable an API key through core (`PATCH /api/core/v1/me/api-keys/{id}` and
+  `PATCH /api/core/v1/api-keys/{id}`; `core/internal/authhttp/me.go:362-366`, `keys.go:214`); HEAD's
+  `PATCH /auth/api-keys/:id` refused every non-interactive caller. Re-enabling still needs a signed-in session, so the
+  change only restricts. `DELETE /api/v1/auth/api-keys/:id` sent with an API key now revokes only a key whose every
+  scope the calling key also holds (core's rule, 05-authn §4.4); HEAD let any key of the owner revoke any of the
+  owner's keys. A script that revokes a wider key with a narrower one now gets
+  `403 {"error":"cannot grant scope you don't have","code":"FORBIDDEN","status":403}`; revoke it from a signed-in
+  session or with a key that holds every scope of the key being revoked. Reading, disabling or revoking another user's
+  key through `/api/v1/auth/api-keys/:id` now needs `users.manage` and roles that outrank the owner's (core's dominance
+  rule, SEC-4), and disabling or revoking another user's key also needs a signed-in session, not an API key; HEAD needed
+  `users.manage` only. A custom role that holds `users.manage` without outranking the owner (for example one that does
+  not grant admin, acting on an admin's key) now gets
+  `403 {"error":"access denied","code":"FORBIDDEN","status":403}`, and the `?all=true` list leaves those keys out. The
+  SPA's API Keys page, the ABS apps and the seed roles are unaffected: the page uses a signed-in session and lists only
+  keys the caller may act on, the ABS apps never call these routes, and only the admin seed role holds `users.manage`,
+  which outranks every role. Core's `GET /api/core/v1/users` and `GET /api/core/v1/users/{id}` need `core:users.view`;
+  HEAD's list needed `users.manage`. Imported seed roles are unaffected, because books' `users.manage` atom maps to
+  `core:users.manage` plus `core:roles.view` (`internal/books/atoms.go`); only a role created natively that holds
+  `core:users.view` alone gains the list. On first run, before the first user exists, the app shows the sign-in page in
+  setup mode instead of the open app, because `requires_auth` is true before the first user. User-management writes
+  under core apply core's dominance, last-admin and role-assignment (`CanAssign`) checks, which HEAD did not. The
+  Users page's pending-invite list no longer shows a "Link" column (copy invite link): core never lists invite tokens.
+  The invite email and Resend still deliver the link. Per-user rows whose owner has no account are carried as they are
+  by M3; Verify counts them (`orphaned_refs`) and health keeps a standing warning: "Pre-existing orphaned rows are kept
+  and reported, never deleted." The invite-accept session keeps HEAD's 30 days (ABO compiles
+  `auth.Options.InviteSessionTTL` = 720h); remember-me sign-ins keep 7 days and plain sign-ins 24 hours. Core's own
+  `core.auth.session.remember_ttl` default stays 7 days and ABO does not change it. The admin footprint read (`GET /api/v1/users/:id/footprint`,
+  the "Sign-ins & data" drawer) answers under core identity in HEAD's shape, with two differences: `invite_grants`
+  is 1 when the account's own e-mail is on core's invite allow-list (core's allow-list rows have no owner, so HEAD's
+  per-owner count cannot be kept; this is the merge preview's count), and the user object has no `email_source`
+  member, which core's user does not carry. Active sessions count the unexpired ones whose credential epoch is the
+  account's current one, as core's session check does. An API key that sends a protected setting unchanged in `PUT /api/v1/config` is now
+  refused (HEAD refused it only when the value changed): "An API key that sends a protected setting unchanged is now
+  refused; leave protected settings out of the request."
 
 ### 9.2.7 Metrics
 
@@ -702,7 +757,7 @@ steps (§9.4 R2).
 | 9 | Web sessions, invites, one-time tokens | HEAD's rows | deleted (M3): everyone signs in to the web app once | 05-authn §11 | re-send open invites (P5; deploy step 8) |
 | 10 | API keys | `abk_` tokens holding atoms | the same tokens, with native scopes (M3); new keys are `mck_` | 05-authn §4.4; 05-rbac §6 | — |
 | 11 | Roles and permissions | 13 stored atoms; seed roles rewritten at every boot | native scopes through the atom table; core seeds the seed roles | 05-rbac §6 | — |
-| 12 | Auth-off behaviour | HEAD's pass-through | credential, key, temp-login and restore routes refuse the auth-disabled principal; the backup routes answer 401 | 05-rbac §4.10–§4.11 | turn authentication on to use them |
+| 12 | Auth-off behaviour | HEAD's pass-through | credential, key, temp-login, restore, user-management (invite, resend, deactivate, reactivate, reset-password), import-path, plugin-settings, tool-install and update routes refuse the auth-disabled principal, and so do the backup routes | 05-rbac §4.10–§4.11 | turn authentication on to use them |
 | 13 | Task kinds, runs and schedules | HEAD's definition IDs and ops rows | `books.<id>` and `core.<id>` by the kind-rename map; runs, clocks, markers and stamps in `c/tasks/` (M4) | 05-tasks §5T.8 | — |
 | 14 | System log | `syslog:` rows | `c/log/`, converted (M5) | 05-logging §5 | — |
 | 15 | Integrations, AI jobs, library roots, the webhook rule | blob fields, `aijob*`, `import_path:` | `c/integrations/instances/`, `c/ai/`, `core.library.roots` entries (IDs kept), native notify instances and their rule (M6) | 05-metadata M1.10; 05-ai §10; 05-library §5L.10; 05-notify §10 | — |
@@ -716,7 +771,7 @@ steps (§9.4 R2).
 | 23 | Pre-R2 backups | — | they still hold plaintext secrets and sign-in tokens; restoring one migrates it again and clears its sign-ins; after R3 it needs R2 installed first and its off-host `.encryption_key` | 05-authn §11; §9.2.2 | keep them as safe as the server, with their `.encryption_key`, or delete them |
 | 24 | Account merges | a finished merge could be undone from its journal | permanent: no merge finished before R2 is undone after it (an undo answers 409 `merge_permanent`), and a merge in progress refuses the upgrade until it is finished (D13) | 05-authn §11 | finish or undo every merge before the deploy (deploy step 0) |
 | 25 | Rollback and revocations | — | a `make rollback-restore` brings back every credential revoked, user disabled or password changed on R2 | 05-storage §5S.3.12 | repeat those revocations after a rollback (SEC-10) |
-| 26 | Auth-off reach of credential metadata | HEAD bound no user with auth off, so these routes answered 401 or did not exist | with auth off, `/me*`, `/api-keys*`, `/users/{id}/sessions*`, `/users/{id}/api-keys*` and the audit routes answer 401; the settings routes keep their auth-off reach (SEC-3) | 05-rbac §4.11; 05-authn §4.13 | turn authentication on to use them |
+| 26 | Auth-off reach of credential metadata | HEAD bound no user with auth off, so these routes answered 401 or did not exist | with auth off, `/me*`, `/api-keys*`, `/users/{id}/sessions*`, `/users/{id}/api-keys*` and the audit routes refuse the auth-disabled principal; the settings routes keep their auth-off reach (SEC-3) | 05-rbac §4.11; 05-authn §4.13 | turn authentication on to use them |
 | 27 | AI request routing | `ai_endpoints_routing` (default off): an install that never turned it on called the single configured backend directly | always routed: every AI call goes through the router over the `ai_endpoints` list, and the setting is dropped; an install that never enabled routing moves to the routed path (its endpoints are derived from the backend scalars it already has) | 05-ai §10; the rename table row `ai_endpoints_routing` | after the first boot check Settings > AI backends: the endpoints list is what serves each AI call |
 
 **The kept contract (D12 (c)).** The **only** frozen external contract is the ABS-compatible API that the phone apps

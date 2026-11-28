@@ -62,7 +62,7 @@ func stagesOver(t *testing.T, engine http.Handler, d httpapi.Deps, routes ...htt
 	}
 	csp, report, build := (&Server{}).LegacyPerimeter()
 	require.NoError(t, r.MountLegacy(httpapi.LegacyMount{
-		Owner: "books", Handler: engine, Auth: httpapi.LegacyAuthGin, ServesSPA: true,
+		Owner: "books", Handler: engine, Auth: httpapi.LegacyAuthCore, ServesSPA: true,
 		Routes: slices.Values(routes), TopSegments: tops,
 		DefaultCSP: csp, CSPReport: report, BuildID: build,
 	}))

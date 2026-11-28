@@ -54,7 +54,7 @@ export const BatchToolbar = ({
   selectedHasImport,
   selectedAudiobooksLength,
 }: BatchToolbarProps) => {
-  // Trashing needs library.delete and restoring library.organize on the server.
+  // Trashing needs books:delete and restoring books:organize on the server.
   // Advisory: the buttons are disabled with the reason instead of failing after
   // the click; the server still refuses a caller who lacks them.
   const mayDelete = useHasPermission(LIBRARY_DELETE_PERMISSION);
@@ -160,7 +160,7 @@ export const BatchToolbar = ({
           Tooltip wraps a span that does. */}
       <Tooltip
         title={
-          mayDelete ? '' : "You don't have permission to move books to the trash (library.delete)."
+          mayDelete ? '' : `You don't have permission to move books to the trash (${LIBRARY_DELETE_PERMISSION}).`
         }
       >
         <span>
@@ -179,7 +179,7 @@ export const BatchToolbar = ({
         title={
           mayRestore
             ? ''
-            : "You don't have permission to restore books from the trash (library.organize)."
+            : `You don't have permission to restore books from the trash (${LIBRARY_ORGANIZE_PERMISSION}).`
         }
       >
         <span>

@@ -80,15 +80,32 @@ func (m *Migration) Preflight(ctx context.Context, r storage.Reader) ([]datamigr
 	}
 	users := map[string][]rbac.RoleName{}
 	holders := map[string]string{} // folded username -> the user ID that holds it
-	for _, kv := range userRows {
+	parsed := make([]parsedUser, len(userRows))
+	var entries []userEntry
+	for i, kv := range userRows {
 		key := string(kv.Key)
-		h, derr := decodeUser(key, kv.Value)
-		if derr != nil {
-			add(key, prefixUser, "the row does not decode: "+derr.Error(), fixHint)
+		parsed[i].key = key
+		parsed[i].h, parsed[i].derr = decodeUser(key, kv.Value)
+		if parsed[i].derr == nil {
+			entries = append(entries, userEntry{key: key, h: parsed[i].h})
+		}
+	}
+	// The system user is imported under core's ID for it, and every reference to
+	// the HEAD row's ID follows (systemuser.go); the rows that make it ambiguous
+	// stop the upgrade instead.
+	sys := classifySystem(entries)
+	for _, p := range parsed {
+		key, h := p.key, p.h
+		if p.derr != nil {
+			add(key, prefixUser, "the row does not decode: "+p.derr.Error(), fixHint)
+			continue
+		}
+		if reason, bad := sys.refusals[key]; bad {
+			add(key, prefixUser, reason, fixHint)
 			continue
 		}
 		roles, _ := roleList(h.Roles, outcomes, m.seeds)
-		u, hash, _ := mapUser(h, roles)
+		u, hash, _ := sys.mapUser(h, roles)
 		if err := auth.CheckImportUser(&u, hash); err != nil {
 			add(key, prefixUser, "the importer rejects the row: "+redact(err), fixHint)
 			continue
@@ -99,7 +116,7 @@ func (m *Migration) Preflight(ctx context.Context, r storage.Reader) ([]datamigr
 			continue
 		}
 		holders[fold] = h.ID
-		users[h.ID] = roles
+		users[string(u.ID)] = roles
 	}
 
 	keyRows, err := scanRows(ctx, r, prefixKey)
@@ -114,7 +131,7 @@ func (m *Migration) Preflight(ctx context.Context, r storage.Reader) ([]datamigr
 			add(key, prefixKey, "the row does not decode: "+derr.Error(), fixHint)
 			continue
 		}
-		roles, ok := users[h.UserID]
+		roles, ok := users[string(sys.ref(h.UserID))]
 		if !ok {
 			add(key, prefixKey, "the key's owner is not stored", fixHint)
 			continue
@@ -123,7 +140,7 @@ func (m *Migration) Preflight(ctx context.Context, r storage.Reader) ([]datamigr
 		if err != nil {
 			return nil, err
 		}
-		scopes, _, err := m.keyScopes(h.Scopes, owner)
+		scopes, _, err := m.scoper.Scopes(h.Scopes, owner)
 		if err != nil {
 			add(key, prefixKey, "the key's scopes are refused by the catalog", fixHint)
 			continue
@@ -163,7 +180,7 @@ func (m *Migration) Preflight(ctx context.Context, r storage.Reader) ([]datamigr
 			add(key, prefixIdentity, "the importer rejects the row: "+redact(err), fixHint)
 			continue
 		}
-		if _, ok := users[h.UserID]; !ok {
+		if _, ok := users[string(sys.ref(h.UserID))]; !ok {
 			add(key, prefixIdentity, "the identity's user is not stored", fixHint)
 			continue
 		}
@@ -192,6 +209,13 @@ func (m *Migration) Preflight(ctx context.Context, r storage.Reader) ([]datamigr
 		}
 	}
 	return out, nil
+}
+
+// parsedUser is a user row as the preflight decoded it.
+type parsedUser struct {
+	key  string
+	h    *headUser
+	derr error
 }
 
 // primaryFamily is the identity family a blocker's key belongs to, "" for a

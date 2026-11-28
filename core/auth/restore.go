@@ -1,5 +1,5 @@
 // file: core/auth/restore.go
-// version: 1.2.0
+// version: 1.3.1
 // guid: 2b7d94e1-6a30-4c58-b9f2-e41c8d05a763
 // last-edited: 2026-11-12
 
@@ -31,8 +31,30 @@ type RestoreDeps struct {
 	// restore (§4.14 step 3); nil when there is none.
 	Previous    Store
 	Revocations journal.RevocationJournal // the lines the hook appends (§4.12)
-	StateFiles  StateFiles                // bootstrap token and read-only key files (COR10-7); nil writes no file
-	Clock       func() time.Time
+	// RunKey names one restore run: "restore:<the restore intent's ID>:seq:<N>"
+	// for a restore boot, or "run:<the host run ID>" for a run with no intent (a
+	// replaced or external store; the kernel's hookRunKey and restrictKey); empty
+	// only for a boot that is neither. A run
+	// that finds its own key SKIPS work: with Journaled, a line the journal already
+	// holds for this run is not appended a second time (RestrictLastAdmins), and a
+	// stored RestoreEpochRun with this key means PostRestore's epoch bump already
+	// committed, so it is not repeated. A skip is only as safe as the key is
+	// unforgeable, so the key must come from the live host (the intent's ID and
+	// the host run ID are minted from crypto/rand and kept outside the store) and
+	// never from anything a restored store can carry (a journal seq, an ID kept in
+	// the store). Empty
+	// means never skip: every line is journaled and every epoch bumped, each run.
+	RunKey string
+	// Journaled reports whether the journal already holds a line equal to r in
+	// kind, subject, object and detail (journal.Component.Journaled). Nil means
+	// the journal cannot be asked, and RestrictLastAdmins appends every line as
+	// it did before the key.
+	Journaled  func(r journal.Revocation) (bool, error)
+	StateFiles StateFiles // bootstrap token and read-only key files (COR10-7); nil writes no file
+	// BootstrapTokenFile is Options.BootstrapTokenFile, the bootstrap token's
+	// file name under the state directory; "" is BootstrapTokenFile.
+	BootstrapTokenFile string
+	Clock              func() time.Time
 	// NewBatch is an indexed batch over Store's keyspace (authstore.Store.NewBatch).
 	NewBatch func() *storage.Batch
 	// Settings are the live core.auth.* values; nil takes every default.
@@ -407,7 +429,10 @@ func (p *restorePlan) reapply(ctx context.Context, r journal.Revocation) error {
 // restore with no pre-swap store has nothing to prove the enable committed,
 // so neither may open access. A user that is deleted (by the store or an
 // earlier line), pending, _system or already active is left as it is: only a
-// disabled user is re-enabled, at the higher of its epoch and the line's.
+// disabled user is re-enabled, at the higher of its epoch and the line's. A
+// disabled user marked merged into another (User.MergedInto) is left disabled
+// and counted as nothing: a merged-away account stays disabled for good, and
+// SetStatus refuses to enable it, so a replayed line must not either.
 func (p *restorePlan) enable(r journal.Revocation) error {
 	if r.Subject.Module != auditModule || r.Subject.Kind != refKindUser || r.Subject.ID == "" || r.Epoch <= 0 {
 		return fmt.Errorf("%w: malformed %s line at seq %d (subject %q, epoch %d)",
@@ -418,7 +443,7 @@ func (p *restorePlan) enable(r journal.Revocation) error {
 	}
 	id := UserID(r.Subject.ID)
 	u := p.users[id]
-	if u == nil || p.deleted[id] || u.Status != StatusDisabled {
+	if u == nil || p.deleted[id] || u.Status != StatusDisabled || u.MergedInto != "" {
 		return nil
 	}
 	u.Status = StatusActive
@@ -546,6 +571,42 @@ func (p *restorePlan) restrictUser(id UserID) error {
 	}
 	return nil
 }
+
+// keyLines makes the lines this plan owes idempotent across a crash (RunKey): each
+// carries the run's key as its last Detail element, and a line the journal already
+// holds for the run (the crash fell between the line and the commit that carries
+// the restriction) is dropped from the plan. Only the line is dropped: every row
+// the restriction changes (sign-in restricted, keys, identity links, the blanked
+// hash) is staged from the store's own state, which the crash left unrestricted,
+// so a durable line never stands in for the restriction. A key with no way to ask
+// the journal changes nothing but the Detail.
+func (p *restorePlan) keyLines() error {
+	if p.d.RunKey == "" {
+		return nil
+	}
+	kept := p.lines[:0]
+	for _, r := range p.lines {
+		r.Detail = append(slices.Clone(r.Detail), RunKeyDetail+p.d.RunKey)
+		if p.d.Journaled != nil {
+			have, err := p.d.Journaled(r)
+			if err != nil {
+				return fmt.Errorf("auth: ask the journal for the %s line of %s: %w", r.Kind, r.Subject.ID, err)
+			}
+			if have {
+				continue
+			}
+		}
+		kept = append(kept, r)
+	}
+	p.lines = kept
+	return nil
+}
+
+// RunKeyDetail prefixes the restore run's key in the Detail of a line
+// RestrictLastAdmins journals. Detail of the kinds it journals (password.changed,
+// api_key.disabled, identity.unlinked) is read by position (identity.unlinked's
+// first two elements), so a last element is not read by any applier.
+const RunKeyDetail = "restore-run:"
 
 // stage writes the plan into b, journal lines first.
 func (p *restorePlan) stage(ctx context.Context, b *storage.Batch) error {
@@ -677,10 +738,31 @@ func PostRestore(ctx context.Context, d RestoreDeps, rc journal.RestoreContext) 
 	}
 	// Step 3 commits after the restrictions: a crash between the two leaves
 	// them applied and the sign-ins to be deleted on the re-run.
+	//
+	// The epoch bump is epoch+1, so a re-run cannot tell its own committed bump
+	// from an unbumped user. The batch therefore stages the run's marker with
+	// the bumps and the deletions it describes: they land together or not at
+	// all, and a re-run that finds its own key skips the bump (it still deletes
+	// whatever sign-ins exist) and reports the counts the first run committed.
+	// A run with no key has nothing to mark, so it bumps every time.
 	err = d.commit(ctx, func(b *storage.Batch) error {
+		var done RestoreEpochRun
+		resumed := false
+		if d.RunKey != "" {
+			prev, ok, err := d.Store.RestoreEpochRun(ctx)
+			if err != nil {
+				return err
+			}
+			resumed = ok && prev.RunKey == d.RunKey
+			done = prev
+		}
 		n, err := d.Store.RevokeSignInsBefore(b, time.Time{})
 		if err != nil {
 			return err
+		}
+		if resumed {
+			counts[CountSignInsDeleted], counts[CountEpochsBumped] = done.SignInsDeleted+n, done.Bumped
+			return nil
 		}
 		bumped := 0
 		for u, err := range d.Store.ScanUsers(ctx) {
@@ -699,6 +781,11 @@ func PostRestore(ctx context.Context, d RestoreDeps, rc journal.RestoreContext) 
 				return err
 			}
 			bumped++
+		}
+		if d.RunKey != "" {
+			if err := d.Store.StageRestoreEpochRun(b, RestoreEpochRun{RunKey: d.RunKey, Bumped: bumped, SignInsDeleted: n}); err != nil {
+				return err
+			}
 		}
 		counts[CountSignInsDeleted], counts[CountEpochsBumped] = n, bumped
 		return nil
@@ -761,6 +848,9 @@ func RestrictLastAdmins(ctx context.Context, d RestoreDeps, ids []UserID) (Resto
 				}
 				return err
 			}
+		}
+		if err := p.keyLines(); err != nil {
+			return err
 		}
 		if err := p.stage(ctx, b); err != nil {
 			return err

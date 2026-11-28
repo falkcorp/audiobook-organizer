@@ -287,7 +287,8 @@ func userMergeCore(ctx context.Context, dry bool, params userMergeParams, env us
 	if action != usermerge.ActionApply {
 		want.SurvivorID, want.AbsorbedID, want.Digest = "", "", ""
 	}
-	if _, err := env.Grants.Redeem(params.Grant, actor, want); err != nil {
+	gr, err := env.Grants.Redeem(params.Grant, actor, want)
+	if err != nil {
 		return fmt.Errorf("%s: %w", UserMergeOpID, err)
 	}
 	if !fresh {
@@ -299,11 +300,12 @@ func userMergeCore(ctx context.Context, dry bool, params userMergeParams, env us
 	switch action {
 	case usermerge.ActionApply:
 		j, err = env.Writer.ApplyUserMerge(ctx, usermerge.ApplyRequest{ActorID: actor, SurvivorID: params.SurvivorID,
-			AbsorbedID: params.AbsorbedID, Digest: params.Digest, AcknowledgeOwnerIdentity: params.AcknowledgeOwnerIdentity}, prog)
+			AbsorbedID: params.AbsorbedID, Digest: params.Digest, AcknowledgeOwnerIdentity: params.AcknowledgeOwnerIdentity,
+			Principal: gr.Principal}, prog)
 	case usermerge.ActionResume:
 		j, err = env.Writer.ResumeUserMerge(ctx, params.JournalID, prog)
 	case usermerge.ActionUndo:
-		j, err = env.Writer.UndoUserMerge(ctx, usermerge.UndoRequest{JournalID: params.JournalID}, prog)
+		j, err = env.Writer.UndoUserMerge(ctx, usermerge.UndoRequest{JournalID: params.JournalID, ActorID: actor, Principal: gr.Principal}, prog)
 	}
 	if j != nil {
 		if rerr := env.SetResult(j.OpResult()); rerr != nil {
@@ -322,6 +324,16 @@ func userMergeCore(ctx context.Context, dry bool, params userMergeParams, env us
 
 // previewUserMerge writes nothing: it reports the plan (apply) or the journal
 // (resume, undo).
+//
+// Under core identity an apply preview run from here FAILS CLOSED: the books
+// half is planned from books' own rows, but the core half is planned by
+// auth.Admin.PlanUserMerge, which acts as the signed-in admin and needs the
+// request's principal in the context. A queued operation has none (the
+// principal rides only in the single-use grant the merge routes mint, and a
+// preview run mints no grant), so core denies the plan and this preview reports
+// that denial instead of a plan. That is intended, not a gap to paper over with
+// a synthesized principal: the preview an admin confirms is the one the Users
+// page's own preview route builds with the request's principal.
 func previewUserMerge(ctx context.Context, params userMergeParams, action usermerge.Action, actor string, env userMergeEnv) error {
 	if action == usermerge.ActionApply {
 		plan, err := env.Store.BuildPlan(ctx, usermerge.PlanRequest{ActorID: actor, SurvivorID: params.SurvivorID, AbsorbedID: params.AbsorbedID})

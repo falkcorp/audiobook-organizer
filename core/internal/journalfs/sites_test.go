@@ -210,6 +210,72 @@ func sites() []site {
 				"journal.location.tmp:create", "journal.location.tmp:write", "journal.location.tmp:sync",
 				"journal.location.rename:rename", "journal.location.cleanup:remove",
 			}},
+		{name: "EnsureHookRun writes a temporary file, renames it and syncs the directory",
+			run: func(e *env) error {
+				_, err := journal.EnsureHookRun(stateDir, "owed:7/ab", fixedClock(), journal.WithFS(e.fsys))
+				return err
+			},
+			want: []string{
+				"journal.hookrun.tmp:create", "journal.hookrun.tmp:write", "journal.hookrun.tmp:sync",
+				"journal.hookrun.rename:rename", "journal.hookrun.dirsync:sync",
+			}},
+		{name: "EnsureHookRun for the binding the file holds writes nothing",
+			setup: func(e *env) {
+				if _, err := journal.EnsureHookRun(stateDir, "owed:7/ab", fixedClock(), journal.WithFS(e.fsys)); err != nil {
+					e.t.Fatal(err)
+				}
+			},
+			run: func(e *env) error {
+				_, err := journal.EnsureHookRun(stateDir, "owed:7/ab", fixedClock(), journal.WithFS(e.fsys))
+				return err
+			},
+			want: nil},
+		{name: "EnsureHookRun for another binding replaces the file the same way",
+			setup: func(e *env) {
+				if _, err := journal.EnsureHookRun(stateDir, "owed:7/ab", fixedClock(), journal.WithFS(e.fsys)); err != nil {
+					e.t.Fatal(err)
+				}
+			},
+			run: func(e *env) error {
+				_, err := journal.EnsureHookRun(stateDir, "owed:9/cd", fixedClock(), journal.WithFS(e.fsys))
+				return err
+			},
+			want: []string{
+				"journal.hookrun.tmp:create", "journal.hookrun.tmp:write", "journal.hookrun.tmp:sync",
+				"journal.hookrun.rename:rename", "journal.hookrun.dirsync:sync",
+			}},
+		{name: "EnsureHookRun removes a temporary file whose fsync failed",
+			fail: failAt(journal.LabelHookRunTmp, errorfs.OpFileSync),
+			run: func(e *env) error {
+				_, err := journal.EnsureHookRun(stateDir, "owed:7/ab", fixedClock(), journal.WithFS(e.fsys))
+				return err
+			},
+			wantErr: true,
+			want: []string{
+				"journal.hookrun.tmp:create", "journal.hookrun.tmp:write", "journal.hookrun.tmp:sync", "journal.hookrun.cleanup:remove",
+			}},
+		{name: "EnsureHookRun removes a temporary file whose rename failed",
+			fail: failAt(journal.LabelHookRunRename, errorfs.OpRename),
+			run: func(e *env) error {
+				_, err := journal.EnsureHookRun(stateDir, "owed:7/ab", fixedClock(), journal.WithFS(e.fsys))
+				return err
+			},
+			wantErr: true,
+			want: []string{
+				"journal.hookrun.tmp:create", "journal.hookrun.tmp:write", "journal.hookrun.tmp:sync",
+				"journal.hookrun.rename:rename", "journal.hookrun.cleanup:remove",
+			}},
+		{name: "ClearHookRun removes the file and syncs the directory",
+			setup: func(e *env) {
+				if _, err := journal.EnsureHookRun(stateDir, "owed:7/ab", fixedClock(), journal.WithFS(e.fsys)); err != nil {
+					e.t.Fatal(err)
+				}
+			},
+			run:  func(e *env) error { return journal.ClearHookRun(stateDir, journal.WithFS(e.fsys)) },
+			want: []string{"journal.hookrun.clear:remove", "journal.hookrun.clear_dirsync:sync"}},
+		{name: "ClearHookRun with no file writes nothing",
+			run:  func(e *env) error { return journal.ClearHookRun(stateDir, journal.WithFS(e.fsys)) },
+			want: nil},
 		{name: "MoveFile copies, fsyncs, renames and syncs the directory",
 			setup: primed,
 			run:   func(e *env) error { return journal.MoveFile(journalAt, movedTo, keys{}, journal.WithFS(e.fsys)) },

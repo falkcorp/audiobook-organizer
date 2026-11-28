@@ -36,7 +36,9 @@ import (
 //   - pNeed / pMasterList: the 20 RequireAdmin/adminRole routes, with
 //     05-rbac §6.2's native permission per admin kind. The four master-list
 //     routes run adminRole and s.perm(users.manage); §6.2 gives them
-//     AllOf(core:users.manage, books:admin.view), which holds both legs.
+//     AllOf(core:users.manage, core:roles.view, books:admin.view): the first
+//     two are the users.manage atom's own scopes (books.AtomTable), the third
+//     is the read-only admin leg.
 //   - pAuth: authenticated with no route-level permission (raw/09 §4, the 36
 //     routes), rbac.AnyAuthenticated (05-http-api §8.1 R1: R6 holds from R1).
 //   - pPublic: unauthenticated: HEAD's reviewed 15 (raw/09 §2.4) and the
@@ -48,7 +50,10 @@ import (
 //   - fInteractive: registered through credRoute (s.credRoutes "always"). A
 //     credRouteWhen route ("conditional") is guarded only for some requests,
 //     which Guards cannot say; gin keeps that guard, so it carries none here.
-//   - fOwner: the chain runs ownerGateWhenOwnerSet (RequireOwner).
+//   - fOwner: the chain runs ownerGateWhenOwnerSet (RequireOwner): Guards.Owner
+//     with LegacyRoute.OwnerWhenSet, so stage 13 demands the owner only while
+//     one is required and otherwise leaves the row's Interactive and Perm to
+//     decide, as HEAD's gate passed through with owner_email unset.
 //   - fBasicExempt: HEAD's Basic-gate health exemption, read by core's stage 8
 //     (httpapi.LegacyRoute.BasicExempt; the gate's other exemptions are
 //     pABS's OwnAuth and LegacyBasicExemptAssets).
@@ -92,7 +97,7 @@ var (
 	pAuth       = legacyPerm{req: func() rbac.Requirement { return rbac.AnyAuthenticated }}
 	pPublic     = legacyPerm{req: func() rbac.Requirement { return rbac.Public }}
 	pABS        = legacyPerm{req: func() rbac.Requirement { return rbac.Delegated(absAuthMethod) }, ownAuth: true}
-	pMasterList = pNeed("core:users.manage", "books:admin.view")
+	pMasterList = pNeed("core:users.manage", "core:roles.view", "books:admin.view")
 )
 
 // legacyRow is one reviewed manifest row.
@@ -104,14 +109,17 @@ type legacyRow struct {
 
 func (r legacyRow) route() httpapi.LegacyRoute {
 	lr := httpapi.LegacyRoute{
-		Method:      r.method,
-		GinPath:     r.path,
-		Perm:        r.perm.req(),
-		Guards:      httpapi.Guards{Interactive: r.flags&fInteractive != 0, Owner: r.flags&fOwner != 0},
-		OwnAuth:     r.perm.ownAuth,
-		BasicExempt: r.flags&fBasicExempt != 0,
-		RateClass:   httpapi.RateExempt,
-		NoCompress:  r.flags&fNoCompress != 0,
+		Method:  r.method,
+		GinPath: r.path,
+		Perm:    r.perm.req(),
+		Guards:  httpapi.Guards{Interactive: r.flags&fInteractive != 0, Owner: r.flags&fOwner != 0},
+		// HEAD's ownerGateWhenOwnerSet (F4-08 B10y): the owner leg only while
+		// core.auth.owner.required, which books derives from owner_email.
+		OwnerWhenSet: r.flags&fOwner != 0,
+		OwnAuth:      r.perm.ownAuth,
+		BasicExempt:  r.flags&fBasicExempt != 0,
+		RateClass:    httpapi.RateExempt,
+		NoCompress:   r.flags&fNoCompress != 0,
 	}
 	lr.Public = lr.Perm.Kind() == rbac.KindPublic
 	if lr.OwnAuth {
@@ -144,10 +152,61 @@ func legacyManifest(absEnabled bool) []httpapi.LegacyRoute {
 // §8.2), so a route added without a reviewed row fails boot.
 func (s *Server) LegacyManifest() ([]httpapi.LegacyRoute, error) {
 	m := legacyManifest(config.AppConfig.ABSAPIEnabled)
+	// Under core identity the rows core serves are core's, not the mount's, and
+	// the rows the flip deleted are nobody's.
+	m = slices.DeleteFunc(m, func(lr httpapi.LegacyRoute) bool {
+		return s.servedByCore(lr.Method, lr.GinPath) || s.deletedAtTheFlip(lr.Method, lr.GinPath)
+	})
 	if err := checkLegacyManifest(s.router.Routes(), m); err != nil {
 		return nil, err
 	}
 	return m, nil
+}
+
+// servedByCore reports whether method and ginPath are one of the exact routes core
+// serves on its fixed group under core identity (httpapi.CoreExactPatterns: HEAD's
+// OAuth start and callback, kept at HEAD's paths so no identity provider's
+// registered redirect URI changes). Router.Build refuses a legacy mount route over
+// such a path (ErrPrefixCollision), and gin must not register one either, so both
+// the manifest and the gin wiring ask here. Always false on a server that is not
+// under core identity: HEAD's own handler serves the path there.
+func (s *Server) servedByCore(method, ginPath string) bool {
+	if s.identity == nil {
+		return false
+	}
+	return slices.Contains(httpapi.CoreExactPatterns(), method+" "+muxPath(ginPath))
+}
+
+// routesDeletedAtTheFlip are HEAD's routes the identity flip deletes and core's
+// native routes replace (F4-08 spec step 3; 07 §7.4.3, the fragment link forms):
+// the temp-login mint, whose successor is POST /api/core/v1/users/{id}/temp-login,
+// and its consumer at the root, whose successor is POST
+// /api/core/v1/auth/temp-login/consume behind the SPA's /login/temp#token=. Under
+// core identity gin does not register them and the mount's manifest leaves them
+// out, so a request answers 404 (the "auth" segment never falls through to the
+// SPA). The rows stay in the static table while the pre-flip engine still serves
+// them; B10h deletes both with it.
+var routesDeletedAtTheFlip = []string{
+	"GET /auth/temp-login",
+	"POST /api/v1/auth/temp-tokens",
+}
+
+// deletedAtTheFlip reports whether method and ginPath are a route the identity
+// flip deleted (routesDeletedAtTheFlip). Always false on a server that is not
+// under core identity: HEAD's own handler serves the path there.
+func (s *Server) deletedAtTheFlip(method, ginPath string) bool {
+	return s.identity != nil && slices.Contains(routesDeletedAtTheFlip, method+" "+ginPath)
+}
+
+// muxPath is a gin path in net/http ServeMux form: ":name" segments become "{name}".
+func muxPath(ginPath string) string {
+	segs := strings.Split(ginPath, "/")
+	for i, seg := range segs {
+		if name, ok := strings.CutPrefix(seg, ":"); ok {
+			segs[i] = "{" + name + "}"
+		}
+	}
+	return strings.Join(segs, "/")
 }
 
 // checkLegacyManifest compares a gin route walk with a manifest.
@@ -505,6 +564,7 @@ func legacyManifestRows() []legacyRow {
 		{http.MethodGet, "/api/v1/auth/oauth-providers", pPublic, fRated},
 		{http.MethodGet, "/api/v1/auth/oauth/:provider/callback", pPublic, fRated},
 		{http.MethodGet, "/api/v1/auth/oauth/:provider/start", pPublic, fRated},
+		{http.MethodPost, "/api/v1/auth/phone-key/claim", pAuth, fRated | fInteractive},
 		{http.MethodGet, "/api/v1/auth/sessions", pAuth, fRated},
 		{http.MethodDelete, "/api/v1/auth/sessions/:id", pAuth, fRated},
 		{http.MethodPost, "/api/v1/auth/setup", pPublic, fRated},

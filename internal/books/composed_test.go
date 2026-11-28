@@ -31,7 +31,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
@@ -162,6 +161,7 @@ func bootComposedWith(t *testing.T, abs bool, stateDir string, edit func(*config
 	if opt != nil {
 		opt(&opts)
 	}
+	opts.Env = withLoopbackListen(opts.Env)
 	var registered module.Module = mod
 	for _, w := range wrap {
 		registered = w(registered)
@@ -251,8 +251,9 @@ func composedOptions(t *testing.T, abs bool, stateDir string, edit func(*config.
 
 	mod := Module().(*booksModule)
 	mod.beforeSettings = func(store *database.PebbleStore) {
-		_, _, err := auth.SeedRoles(store)
-		require.NoError(t, err)
+		// The role rows are a retired claim under the identity flip (core owns
+		// the roles), so HEAD's role seed is not run: it would be refused,
+		// correctly.
 		if pre != nil {
 			pre(store)
 		}
@@ -518,39 +519,91 @@ func TestServeComposition_HostileOTLPEnvNeverLogged(t *testing.T) {
 // TestLegacyMount_UnmatchedMethodMatchesGin against the composed App: books'
 // real mount (its claims, top segments and redirects, from Register) behind
 // the kernel's root handler. Every method a manifest path does not route
-// answers as HEAD's engine did: status, content type and body. OPTIONS is
+// answers as the engine does: status, content type and body. OPTIONS is
 // the known difference of a.Handler(): the perimeter shim in front of it in
 // production sends OPTIONS straight to the engine (perimeter_shim_test.go
 // pins that).
+//
+// Since B10g the engine runs under core identity, where gin authenticates
+// nobody itself: it reads the principal stage 12 binds, so the bare engine
+// answers every pair a gin route serves with its 401 (no principal), where
+// the App, with auth off, binds the auth-disabled principal and the handler
+// answers. Those pairs are not unmatched in gin (a param sibling such as
+// /audiobooks/:id routes GET /audiobooks/batch); their authorization is the
+// reach oracle's cell for the gin route that serves them, so here they are held
+// only to gin answering them (no core refusal, no 5xx). Two more cells per
+// surface are a known difference, refusal to refusal: HEAD on a GET row with
+// the Interactive guard, which the mux matches to the GET pattern, so stage 13
+// refuses with 403 interactive_required where gin answered 404.
 func TestComposedApp_UnmatchedMethodMatchesGin(t *testing.T) {
+	ginNeedsPrincipal := `{"error":"authentication required","code":"UNAUTHORIZED","status":401}`
 	for _, abs := range []bool{false, true} {
 		t.Run("abs="+strconv.FormatBool(abs), func(t *testing.T) {
 			c := bootComposed(t, abs, nil, nil)
 			engine := c.srv.LegacyHandler()
 			routed := map[string]bool{}
+			interactiveGET := map[string]bool{}
 			var paths []string
 			for _, lr := range server.LegacyRoutes(abs) {
-				p := concretePath(lr.GinPath)
+				segs := strings.Split(lr.GinPath, "/")
+				for i, segment := range segs {
+					if strings.HasPrefix(segment, ":") || strings.HasPrefix(segment, "*") {
+						segs[i] = "riddler"
+					}
+				}
+				p := strings.Join(segs, "/")
 				if !slices.Contains(paths, p) {
 					paths = append(paths, p)
 				}
 				routed[lr.Method+" "+p] = true
+				if lr.Method == http.MethodGet && (lr.Guards.Interactive || lr.Guards.Session) {
+					interactiveGET[p] = true
+				}
 			}
 			methods := []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}
-			n := 0
+			unmatched, siblings, headInteractive := 0, 0, 0
 			for _, p := range paths {
 				for _, m := range methods {
 					if routed[m+" "+p] {
 						continue
 					}
-					n++
 					g, k := probe(engine, m, p), probe(c.app.Handler(), m, p)
-					assert.Equal(t, g.Code, k.Code, "%s %s", m, p)
-					assert.Equal(t, g.Header().Get("Content-Type"), k.Header().Get("Content-Type"), "%s %s", m, p)
-					assert.Equal(t, g.Body.String(), k.Body.String(), "%s %s", m, p)
+					switch {
+					case g.Code == http.StatusUnauthorized && g.Body.String() == ginNeedsPrincipal:
+						// A gin route serves the pair and wants stage 12's principal.
+						siblings++
+						switch {
+						case m == http.MethodDelete && slices.Contains([]string{"/api/v1/backup/create", "/api/v1/backup/list", "/api/v1/backup/restore"}, p):
+							// The backup delete handler reports a missing archive as 500.
+							assert.Equal(t, http.StatusInternalServerError, k.Code, "%s %s", m, p)
+							assert.Contains(t, k.Body.String(), "failed to delete backup", "%s %s", m, p)
+						default:
+							assert.Less(t, k.Code, 500, "%s %s: a gin route serves it, and the App answers %d %s", m, p, k.Code, k.Body.String())
+						}
+						assert.NotEqual(t, "application/problem+json", k.Header().Get("Content-Type"),
+							"%s %s: a gin route serves it, and core refused it before gin: %s", m, p, k.Body.String())
+					case m == http.MethodHead && (p == "/api/v1/auth/oauth/riddler/start" || p == "/api/v1/auth/oauth/riddler/callback"):
+						// The core mux dispatches HEAD via its GET registration.
+						assert.Equal(t, http.StatusNotFound, g.Code, "%s %s", m, p)
+						assert.Equal(t, http.StatusNotFound, k.Code, "%s %s", m, p)
+						assert.Equal(t, "application/problem+json", k.Header().Get("Content-Type"), "%s %s", m, p)
+						assert.Contains(t, k.Body.String(), "no such provider", "%s %s", m, p)
+					case m == http.MethodHead && interactiveGET[p] && g.Code == http.StatusNotFound &&
+						k.Code == http.StatusForbidden && strings.Contains(k.Body.String(), `"code":"interactive_required"`):
+						headInteractive++
+					default:
+						unmatched++
+						assert.Equal(t, g.Code, k.Code, "%s %s", m, p)
+						assert.Equal(t, g.Header().Get("Content-Type"), k.Header().Get("Content-Type"), "%s %s", m, p)
+						assert.Equal(t, g.Body.String(), k.Body.String(), "%s %s", m, p)
+					}
 				}
 			}
-			assert.Greater(t, n, 1000, "too few unrouted method/path pairs; the scan is broken")
+			t.Logf("unrouted method/path pairs: %d compared exactly, %d served by a gin param route, %d HEAD on an Interactive GET row",
+				unmatched, siblings, headInteractive)
+			assert.Greater(t, unmatched, 1000, "too few unrouted method/path pairs; the scan is broken")
+			assert.Positive(t, siblings, "no pair is served by a gin param route: the engine no longer reads stage 12's principal, or the scan is broken")
+			assert.Equal(t, len(interactiveGET), headInteractive, "every Interactive GET row's HEAD is refused by stage 13, and nothing else is")
 			for _, p := range []string{"/login", "/socket.io/", "/ping/riddler", "/metrics/riddler", "/library/riddler"} {
 				assert.Equal(t, probe(engine, http.MethodGet, p).Code, probe(c.app.Handler(), http.MethodGet, p).Code, "GET %s", p)
 			}
@@ -558,19 +611,6 @@ func TestComposedApp_UnmatchedMethodMatchesGin(t *testing.T) {
 	}
 }
 
-// concretePath fills a gin path's parameters with a placeholder segment.
-func concretePath(gin string) string {
-	segs := strings.Split(gin, "/")
-	for i, s := range segs {
-		if strings.HasPrefix(s, ":") || strings.HasPrefix(s, "*") {
-			segs[i] = "riddler"
-		}
-	}
-	return strings.Join(segs, "/")
-}
-
-// probe sends one request with an already-cancelled context, so a handler
-// that does run returns at once.
 func probe(h http.Handler, method, path string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, nil)
 	ctx, cancel := context.WithCancel(req.Context())
@@ -724,17 +764,34 @@ func TestOptions_FromReleaseReachesCore(t *testing.T) {
 // composedOptions put in the process environment for ResolveBootPaths.
 func storageEnv() string { return storagePathEnv + "=" + os.Getenv(storagePathEnv) }
 
-// listenEnv puts the listener on a free loopback port. A harness that
-// replaces app.Options.Env drops the process environment, and with it the
-// ABO_CORE_HTTP_LISTEN runComposedIn sets, so the listener would bind ABO's
-// compiled default 127.0.0.1:8484 and fail wherever that port is taken (a
-// host running the service, or two packages testing at once).
-const listenEnv = "ABO_CORE_HTTP_LISTEN=127.0.0.1:0"
-
 // bootEnv is the environment a harness that replaces app.Options.Env gives a
-// booting service: the storage path, the free listen port, then extra.
+// booting service: the storage path, then extra. The listen port is not its
+// business: bootComposedWith passes the final Env through withLoopbackListen,
+// and the boots that never Run (bootOnce, bootAt) bind nothing.
 func bootEnv(extra ...string) []string {
-	return append([]string{storageEnv(), listenEnv}, extra...)
+	return append([]string{storageEnv()}, extra...)
+}
+
+// loopbackListenEnv is the operator value that puts a test App's listener on a
+// free loopback port.
+const loopbackListenEnv = "ABO_CORE_HTTP_LISTEN=127.0.0.1:0"
+
+// withLoopbackListen keeps a test App off ABO's compiled listen default
+// (127.0.0.1:8484). composedOptions sets the same value on the process
+// environment, but a test that hands the boot its own Options.Env replaces that
+// environment whole, and its App then bound 8484: two such tests on one host
+// (the production service, parallel packages, two worktrees, two CI pipelines)
+// collided with "address already in use". It is the one mechanism for that:
+// bootComposedWith applies it to the Env its opt left, and every test App that
+// Runs is built there (runComposedIn, bootComposed), so no harness names the port
+// itself. bootOnce and bootAt never Run, so they bind nothing. A nil env falls
+// back to the process environment, which already carries the value; an env that
+// names a listen address keeps it.
+func withLoopbackListen(env []string) []string {
+	if env == nil || slices.ContainsFunc(env, func(kv string) bool { return strings.HasPrefix(kv, "ABO_CORE_HTTP_LISTEN=") }) {
+		return env
+	}
+	return append(slices.Clip(env), loopbackListenEnv)
 }
 
 // absEnv is the ABS layers (flag and signing secret, both operator-only) a

@@ -195,7 +195,8 @@ func (e *env) tripped() *api {
 }
 
 // Every Interactive route refuses an API key (403 interactive_required) and
-// the auth-disabled principal (401 authentication_required) before any Service
+// the auth-disabled principal (403 interactive_required, F4-08 ruling G5(a):
+// never a session-ending 401) before any Service
 // method runs: the guard is the route's own, ahead of the call, not a
 // property of what the Service later decides.
 func TestInteractiveRoutes_RefuseKeysAndAuthOffBeforeTheService(t *testing.T) {
@@ -209,7 +210,7 @@ func TestInteractiveRoutes_RefuseKeysAndAuthOffBeforeTheService(t *testing.T) {
 			continue
 		}
 		wantErr(t, run(key), http.StatusForbidden, "interactive_required")
-		wantErr(t, run(e.authOff()), http.StatusUnauthorized, "authentication_required")
+		wantAuthOffRefusal(t, run(e.authOff()))
 		wantErr(t, run(nil), http.StatusUnauthorized, "authentication_required")
 	}
 }
@@ -226,8 +227,10 @@ func (a *api) specOf(t testing.TB, route string) spec {
 }
 
 // The auth-disabled principal has no user: every route that lists or reads
-// credential metadata answers 401 authentication_required, before any Service
-// call, though its checker holds every scope (05-authn §4.11, SEC-3).
+// credential metadata answers 403 interactive_required (not the session-ending
+// 401: F4-08 ruling G5(a)), before any Service call, though its checker holds
+// every scope (05-authn §4.11, SEC-3). A request with no principal is still 401
+// authentication_required.
 func TestAuthOff_CredentialMetadataNeedsAUser(t *testing.T) {
 	e := newEnv(t)
 	e.user("bruce", "brucebruce", rbac.RoleAdmin)
@@ -240,7 +243,8 @@ func TestAuthOff_CredentialMetadataNeedsAUser(t *testing.T) {
 			continue
 		}
 		seen++
-		wantErr(t, run(off), http.StatusUnauthorized, "authentication_required")
+		wantAuthOffRefusal(t, run(off))
+		wantErr(t, run(nil), http.StatusUnauthorized, "authentication_required")
 	}
 	if seen < 19 {
 		t.Fatalf("only %d user-required routes exercised", seen)

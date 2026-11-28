@@ -23,7 +23,9 @@ func TestITunesDisabled_ReturnsServiceUnavailable(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	srv := &Server{router: gin.New()}
-	srv.setupRoutes() // must not panic with nil itunesSvc
+	if err := srv.setupRoutes(); err != nil {
+		t.Fatalf("setupRoutes: %v", err)
+	} // setupRoutes must not panic with nil itunesSvc
 
 	cases := []struct {
 		method string

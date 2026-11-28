@@ -524,10 +524,10 @@ func TestRoleDelete_UserWriteCommitsInsideTheDelete(t *testing.T) {
 func TestLastAdmin_MergeUsers(t *testing.T) {
 	t.Run("role edit commits inside the merge", func(t *testing.T) {
 		r := newAdminRace(t)
-		jason := r.f.user("jason-todd", "gotham.detective")
+		jason := r.f.signable(r.f.user("jason-todd", "gotham.detective"))
 		var editErr error
 		fired := r.holdOnce(func() { editErr = r.stripAdmin() })
-		err := r.f.stageMerge(r.f.signedIn(r.bruce), auth.UserMergePlan{Source: r.dick.ID, Target: jason.ID})
+		err := r.f.stageMerge(r.f.signedIn(r.bruce), r.f.rawPlan(r.dick.ID, jason.ID))
 		if !fired.Load() {
 			t.Fatal("the role edit never ran inside the merge")
 		}
@@ -551,7 +551,7 @@ func TestLastAdmin_MergeUsers(t *testing.T) {
 		if err := r.stripAdmin(); err != nil {
 			t.Fatal(err)
 		}
-		err := r.f.stageMerge(r.f.signedIn(r.dick), auth.UserMergePlan{Source: r.dick.ID, Target: jason.ID})
+		err := r.f.stageMerge(r.f.signedIn(r.dick), r.f.rawPlan(r.dick.ID, jason.ID))
 		if !errors.Is(err, auth.ErrLastAdmin) {
 			t.Fatalf("merging the only admin left away: err = %v, want ErrLastAdmin", err)
 		}
@@ -561,7 +561,7 @@ func TestLastAdmin_MergeUsers(t *testing.T) {
 		f := newFxRoleStore(t, func(s rbac.Store) rbac.Store { return bareRoleStore{s} })
 		bruce := f.user("bruce-wayne", rbac.RoleAdmin)
 		dick := f.user("dick-grayson", rbac.RoleAdmin)
-		err := f.stageMerge(f.signedIn(bruce), auth.UserMergePlan{Source: dick.ID, Target: bruce.ID})
+		err := f.stageMerge(f.signedIn(bruce), f.rawPlan(dick.ID, bruce.ID))
 		if !errors.Is(err, rbac.ErrNoRoleGuard) {
 			t.Fatalf("a merge over a role store with no guard: err = %v, want rbac.ErrNoRoleGuard", err)
 		}

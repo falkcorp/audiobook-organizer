@@ -605,7 +605,9 @@ func testManifestSelftest(t *testing.T) {
 		}
 		require.Equal(t, []string{
 			"level " + storage.LevelStepName(cutover.BooksOwner, cutover.BooksCutoverLevel),
+			"level " + storage.LevelStepName(cutover.BooksOwner, cutover.BooksIdentityLevel),
 			"data " + cutover.ConfigCutoverID,
+			"data " + cutover.IdentityCutoverID,
 			"rewrite " + cutover.RewriteID,
 		}, got)
 		level, m2 := steps[0], steps[1]

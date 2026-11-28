@@ -1,0 +1,3 @@
+### Changed
+
+- With authentication off, the eleven actions core refuses for the auth-disabled principal (create a temp-login link, restore a backup, add an import path, install a tool, apply an update, save plugin settings, and on the Users page create or resend an invitation, deactivate, reactivate and reset a password) now show "Turn on sign-in to do this" with a link to the operator configuration page, and their buttons are disabled up front, instead of surfacing a raw 403. A 403 `interactive_required` (or, while auth is off, `FORBIDDEN`) that arrives anyway is shown as the same message. With authentication on nothing changes. Nothing about the requests themselves changed: no route, permission or credential path is different.

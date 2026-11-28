@@ -1,7 +1,7 @@
 // file: internal/server/owner_routes.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 3e9a6c25-1f74-4b8d-a0c2-5d7e8b4f1a63
-// last-edited: 2026-11-11
+// last-edited: 2026-11-21
 
 package server
 
@@ -26,10 +26,21 @@ import (
 // skipped with local auth off. The permission leg is left to the route's own
 // s.perm / RequireAdmin.
 func (s *Server) ownerGateWhenOwnerSet() gin.HandlerFunc {
+	if gateTraceForTest != nil {
+		return gateTraceForTest(gateInfo{Kind: gateOwner})
+	}
 	ownerEmail := func() string { return config.Snapshot().OwnerEmail }
-	return cfaccess.RequireOwner(ownerEmail, "", func(*gin.Context) bool {
-		return strings.TrimSpace(ownerEmail()) != ""
-	})
+	ownerSet := func(*gin.Context) bool { return strings.TrimSpace(ownerEmail()) != "" }
+	// Under core identity (F4-08 B10b2) the same gate reads core's principal:
+	// the Access extension's, with AssuranceOwner (cfaccess.RequireOwnerCore).
+	// It is not the bridge's RequireOwner, whose core.auth.owner.required=false
+	// fallback to an interactive core:admin principal would admit a
+	// password-session admin where HEAD refuses everyone but the Access owner.
+	// The mode is the wiring's (s.identity), never the request's.
+	if s.identity != nil {
+		return cfaccess.RequireOwnerCore(ownerEmail, "", nil, ownerSet)
+	}
+	return cfaccess.RequireOwner(ownerEmail, "", ownerSet)
 }
 
 // ownerCredRoute is credRoute for a route behind ownerGateWhenOwnerSet. The

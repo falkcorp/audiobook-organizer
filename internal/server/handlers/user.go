@@ -19,6 +19,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 	coreauth "github.com/falkcorp/mediacore/auth"
@@ -75,6 +76,19 @@ type UserHandler struct {
 	// emailSetter sets another user's email as verified (SetUserEmail). nil
 	// when the store lacks the capability; SetUserEmail then refuses.
 	emailSetter database.AdminEmailSetter
+	// mailStore is books' delivery record of core invites' e-mail, used only
+	// under core identity (invite_identity.go). nil when the store lacks the
+	// capability; the record is UI and resend data and is then not kept.
+	mailStore database.InviteMailStore
+	// accepts is books' record of each accepted invite, which the accepted list
+	// is read from under core identity (acceptedInvitesUnderIdentity). nil when
+	// the store lacks the capability, and the list is then empty.
+	accepts database.InviteAcceptStore
+	// outcomes is books' record of the Cloudflare guest-policy sync's outcome per
+	// accepted core invite, joined to each accept by invite id for the list's
+	// guest_policy_* members (acceptedInvitesUnderIdentity). nil when the store
+	// lacks the capability.
+	outcomes database.GuestPolicyStore
 	// acceptChecker runs accept's own checks for the public lookup, so it
 	// answers 404 whenever accept would refuse. nil when the store lacks the
 	// capability; the lookup then checks only missing, used and expired.
@@ -102,6 +116,15 @@ func NewUserHandler(store UserStore) *UserHandler {
 	}
 	if es, ok := database.AsCapability[database.AdminEmailSetter](store); ok {
 		h.emailSetter = es
+	}
+	if ms, ok := database.AsCapability[database.InviteMailStore](store); ok {
+		h.mailStore = ms
+	}
+	if gp, ok := database.AsCapability[database.GuestPolicyStore](store); ok {
+		h.outcomes = gp
+	}
+	if ia, ok := database.AsCapability[database.InviteAcceptStore](store); ok {
+		h.accepts = ia
 	}
 	if ac, ok := database.AsCapability[database.InviteAcceptChecker](store); ok {
 		h.acceptChecker = ac
@@ -153,6 +176,10 @@ func (h *UserHandler) ListUsers(c *gin.Context) {
 // the request: the response still carries the token and invite_url, so the
 // admin can hand the link over by hand, plus email_sent=false and email_error.
 func (h *UserHandler) CreateInvite(c *gin.Context) {
+	if id, ok := legacyauth.IdentityFrom(c.Request.Context()); ok {
+		h.createInviteUnderIdentity(c, id)
+		return
+	}
 	var req struct {
 		Username  string `json:"username" binding:"required"`
 		RoleID    string `json:"role_id" binding:"required"`
@@ -275,7 +302,13 @@ func newPendingInviteView(inv *database.Invite, withToken bool) *pendingInviteVi
 // With auth disabled there is no caller to tell apart and the credential
 // guard is off as well, so every token is shown, as before.
 func (h *UserHandler) inviteTokenVisible(c *gin.Context, inv *database.Invite) bool {
-	if !h.authEnabled {
+	// "Auth off" is HEAD's wiring flag, or, under core identity (F4-08 B7), the
+	// auth-disabled principal: the flag is books' own and is not read there.
+	if b, bridged := legacyauth.BridgeFrom(c.Request.Context()); bridged {
+		if b.AuthOff(c.Request.Context()) {
+			return true
+		}
+	} else if !h.authEnabled {
 		return true
 	}
 	if !servermiddleware.CredentialChangeAllowed(c) {
@@ -285,7 +318,8 @@ func (h *UserHandler) inviteTokenVisible(c *gin.Context, inv *database.Invite) b
 		return true
 	}
 	actor, ok := servermiddleware.CurrentUser(c)
-	return ok && actor != nil && actor.Status == "active" && slices.Contains(actor.Roles, adminRole) && servermiddleware.APIKeyMayActAsAdmin(c)
+	return ok && actor != nil && actor.Status == "active" && slices.Contains(actor.Roles, adminRole) && servermiddleware.APIKeyMayActAsAdmin(c) &&
+		!legacyauth.AdminRefused(c.Request.Context())
 }
 
 // findInvite resolves an admin route's invite ID to the invite, or nil.
@@ -308,6 +342,10 @@ func (h *UserHandler) findInvite(id string) (*database.Invite, error) {
 // ListInvites handles GET /api/v1/users/invites — returns active invites,
 // each with its ID and, only where inviteTokenVisible allows, its token.
 func (h *UserHandler) ListInvites(c *gin.Context) {
+	if id, ok := legacyauth.IdentityFrom(c.Request.Context()); ok {
+		h.listInvitesUnderIdentity(c, id)
+		return
+	}
 	invites, err := h.store.ListActiveInvites()
 	if err != nil {
 		httputil.InternalError(c, "failed to list invites", err)
@@ -333,6 +371,10 @@ func (h *UserHandler) ListInvites(c *gin.Context) {
 // DeleteInvite handles DELETE /api/v1/users/invites/:id — revokes an invite
 // by its ID (database.InviteID), never its token.
 func (h *UserHandler) DeleteInvite(c *gin.Context) {
+	if idn, ok := legacyauth.IdentityFrom(c.Request.Context()); ok {
+		h.deleteInviteUnderIdentity(c, idn)
+		return
+	}
 	id := c.Param("id")
 	inv, err := h.findInvite(id)
 	if err != nil {
@@ -463,6 +505,14 @@ func (h *UserHandler) SetUserEmail(c *gin.Context) {
 		httputil.RespondWithInternalError(c, "setting emails is not supported by this store")
 		return
 	}
+	// Under core identity (F4-08 B7) the actor must also hold core:admin; the
+	// role test above stays as HEAD's, and this is a further refusal. It follows
+	// the store-capability check only because the pin test's anchor text runs
+	// through that check; nothing is read or written between the two.
+	if legacyauth.AdminRefused(c.Request.Context()) {
+		httputil.RespondWithForbidden(c, "setting another user's email needs the admin role")
+		return
+	}
 	var req struct {
 		Email *string `json:"email"`
 	}
@@ -476,6 +526,12 @@ func (h *UserHandler) SetUserEmail(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
+	// Under core identity the account record is core's: the write below goes to
+	// core's SetUserEmail (invite_identity.go), after every gate above.
+	if idn, ok := legacyauth.IdentityFrom(c.Request.Context()); ok {
+		h.setUserEmailUnderIdentity(c, idn, id, email)
+		return
+	}
 	previous, err := h.emailSetter.SetUserEmailAsAdmin(id, email)
 	switch {
 	case errors.Is(err, database.ErrUserNotFound):

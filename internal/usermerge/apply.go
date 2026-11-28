@@ -16,6 +16,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // ApplyRequest is a confirmed merge: the ids, the digest of the preview the admin
@@ -29,6 +30,11 @@ type ApplyRequest struct {
 	// merged away holds the owner's sign-in, or when the plan cannot tell
 	// (Plan.OwnerIdentityAckRequired).
 	AcknowledgeOwnerIdentity bool
+	// Principal is the acting admin's own principal (identity only): the one the
+	// request that minted the grant held. It is checked, never trusted: Apply
+	// re-validates it through core (Refresh) and takes its ctx from the result.
+	// It is not serialized and not logged (see Grant).
+	Principal *coreauth.Principal
 }
 
 // Progress reports done of total ops with a short message. It may be nil.
@@ -117,8 +123,14 @@ func failText(err error) string {
 // A refusal or a digest mismatch writes nothing except that the absorbed account
 // is left locked (its sessions ended): the admin previews again.
 func (s *Service) Apply(ctx context.Context, req ApplyRequest, prog Progress) (*Journal, error) {
+	if err := s.CheckAvailable(); err != nil {
+		return nil, err
+	}
 	runMu.Lock()
 	defer runMu.Unlock()
+	if s.flipped() {
+		return s.applyIdentity(ctx, req, prog)
+	}
 	if err := s.refuseIfOpenJournal(req.SurvivorID, req.AbsorbedID); err != nil {
 		return nil, err
 	}
@@ -182,6 +194,16 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest, prog Progress) (*
 // Resume continues an unfinished apply from its journal's cursor. It is only
 // ever reached by an admin's click (a merge is never resumed automatically).
 func (s *Service) Resume(ctx context.Context, journalID string, prog Progress) (*Journal, error) {
+	if s.flipped() {
+		// An identity-era merge is one batch and leaves nothing half-applied, and
+		// a pre-flip journal's remaining ops write keys the cutover retired: the
+		// only thing under identity left to resume is the straggler sweep of a
+		// merge that committed without it finishing (resumeIdentity); every other
+		// journal stays permanent (see CheckMergeAction).
+		runMu.Lock()
+		defer runMu.Unlock()
+		return s.resumeIdentity(ctx, journalID, prog)
+	}
 	runMu.Lock()
 	defer runMu.Unlock()
 	j, err := s.LoadJournal(journalID)
@@ -379,6 +401,9 @@ func (s *Service) hasStragglers(ctx context.Context, j *Journal) (bool, error) {
 }
 
 func (s *Service) stragglerOps(ctx context.Context, j *Journal) ([]database.UserMergeOp, error) {
+	if s.flipped() {
+		return s.identityStragglerOps(ctx, j)
+	}
 	surv, err := s.mustUser(j.SurvivorID, "survivor")
 	if err != nil {
 		return nil, err

@@ -27,11 +27,31 @@ const (
 	msgAuthRequired  = "authentication required"
 	msgAdminRequired = "admin role required"
 	msgOwnerRequired = "this action needs the deployment owner's verified sign-in"
+	// msgAuthOffRefused is the body of a refusal of the auth-disabled principal
+	// (F4-08 ruling G5(a)): a 403, never the 401 that would end a no-auth
+	// install's SPA session. It is core's AuthOffRefusal detail.
+	msgAuthOffRefused = "turn authentication on to use this route"
 )
 
 // unauthenticated answers 401 and stops the chain.
 func unauthenticated(c *gin.Context) {
 	httputil.RespondWithUnauthorized(c, msgAuthRequired)
+	c.Abort()
+}
+
+// RespondNoUser is the refusal of a handler that needs a signed-in user and
+// finds none on the context: HEAD's 401, except that the auth-disabled
+// principal is answered 403 (msgAuthOffRefused). A 401 would end a no-auth
+// install's SPA session, and that install has nothing to sign in to (F4-08
+// ruling G5(a)); the request is refused all the same. A request with no
+// principal at all, or one that is not the auth-disabled one, keeps the 401.
+// It stops the chain.
+func RespondNoUser(c *gin.Context, msg string) {
+	if p, ok := coreauth.PrincipalFrom(c.Request.Context()); ok && p != nil && authDisabled(p) {
+		forbidden(c, msgAuthOffRefused)
+		return
+	}
+	httputil.RespondWithUnauthorized(c, msg)
 	c.Abort()
 }
 
@@ -42,19 +62,32 @@ func forbidden(c *gin.Context, msg string) {
 }
 
 // enforce runs rbac.RequireRequirement on r and answers a refusal as HEAD's
-// RespondPermissionDenied did: 401 when the caller has no user (the
-// auth-disabled principal, refused only an all-AuthRequired requirement,
-// 05-rbac §4.11), 403 with msg otherwise.
+// RespondPermissionDenied did, except for the auth-disabled principal (refused
+// only an all-AuthRequired requirement, 05-rbac §4.11): HEAD's 401 for a
+// caller with no user is a 403 for it (msgAuthOffRefused, F4-08 ruling
+// G5(a)), so a no-auth install's SPA is not signed out by a refused action.
+// Any other caller with no user is 401; one with a user is 403 with msg.
 func enforce(c *gin.Context, p *coreauth.Principal, r rbac.Requirement, msg string) {
-	if err := rbac.RequireRequirement(c.Request.Context(), r); err != nil {
-		if p.User == nil {
-			unauthenticated(c)
-			return
-		}
-		forbidden(c, msg)
-		return
+	if holds(c, p, r, msg) {
+		c.Next()
 	}
-	c.Next()
+}
+
+// holds is enforce's check without continuing the chain: it reports whether
+// the caller satisfies r and, when not, writes the refusal and stops the chain.
+func holds(c *gin.Context, p *coreauth.Principal, r rbac.Requirement, msg string) bool {
+	if err := rbac.RequireRequirement(c.Request.Context(), r); err != nil {
+		switch {
+		case authDisabled(p):
+			forbidden(c, msgAuthOffRefused)
+		case p.User == nil:
+			unauthenticated(c)
+		default:
+			forbidden(c, msg)
+		}
+		return false
+	}
+	return true
 }
 
 // RequirePerm is the adapter of HEAD's s.perm(atom): the caller must satisfy
@@ -83,29 +116,39 @@ func (b *Bridge) RequirePerm(atom string) gin.HandlerFunc {
 // RequireAdmin is the adapter of HEAD's role-name RequireAdmin and adminRole
 // gates: the caller must satisfy perm, which is 05-rbac §6.2's permission for
 // the route's admin kind (books:admin.view, AllOf(core:users.manage,
-// books:admin.view), books:admin.debug or core:admin; the route's manifest
+// core:roles.view, books:admin.view), books:admin.debug or core:admin; the route's manifest
 // Perm). Auth-off reach follows from the auth-disabled checker. perm must be
 // an AllOf or AnyOf; any other value refuses every request.
 func (b *Bridge) RequireAdmin(perm rbac.Requirement) gin.HandlerFunc {
-	checkable := perm.Kind() == rbac.KindAllOf || perm.Kind() == rbac.KindAnyOf
 	return func(c *gin.Context) {
-		p, ok := coreauth.PrincipalFrom(c.Request.Context())
-		if !ok {
-			unauthenticated(c)
-			return
+		if b.CheckAdmin(c, perm) {
+			c.Next()
 		}
-		if !checkable {
-			forbidden(c, msgAdminRequired)
-			return
-		}
-		enforce(c, p, perm, msgAdminRequired)
 	}
+}
+
+// CheckAdmin is RequireAdmin's decision without continuing the chain, for a
+// gate that adds a further check of its own after it (F4-08 B7b). It reports
+// whether the caller satisfies perm; when not it has written the refusal (401
+// without a principal or a user, 403 otherwise, and 403 for a perm that is not
+// an AllOf or AnyOf) and stopped the chain.
+func (b *Bridge) CheckAdmin(c *gin.Context, perm rbac.Requirement) bool {
+	p, ok := coreauth.PrincipalFrom(c.Request.Context())
+	if !ok {
+		unauthenticated(c)
+		return false
+	}
+	if perm.Kind() != rbac.KindAllOf && perm.Kind() != rbac.KindAnyOf {
+		forbidden(c, msgAdminRequired)
+		return false
+	}
+	return holds(c, p, perm, msgAdminRequired)
 }
 
 // RequireCredentialChange is the adapter of HEAD's credGuard (Guards.Interactive
 // at stage 13): the principal's method must be one that may change
-// credentials (coreauth.Method.MayChangeCredentials, the check stage 13 and
-// authhttp make). The auth-disabled principal is refused: HEAD's guard was a
+// credentials (coreauth.Principal.MayChangeCredentials, the check stage 13 and
+// authhttp make, which reads the registered MethodSpec of an extension). The auth-disabled principal is refused: HEAD's guard was a
 // pass-through with auth off, and core tightens it on purpose (05-authn
 // §4.11, 05-rbac §4.11 (a), SEC5-8). The body is HEAD's.
 func RequireCredentialChange() gin.HandlerFunc {
@@ -115,7 +158,7 @@ func RequireCredentialChange() gin.HandlerFunc {
 			unauthenticated(c)
 			return
 		}
-		if !p.Method.MayChangeCredentials() {
+		if !p.MayChangeCredentials() {
 			forbidden(c, auth.CredentialChangeRefusedMessage)
 			return
 		}
@@ -123,17 +166,18 @@ func RequireCredentialChange() gin.HandlerFunc {
 	}
 }
 
-// RequireOwner is the adapter of HEAD's RequireOwner (Guards.Owner at stage
-// 13, 05-authn §4.8): the principal must carry AssuranceOwner, which only an
-// OwnerVerifier extension sets. Only when core.auth.owner.required is false
-// (the injected OwnerRequired; nil reads as true) does it fall back to an
-// interactive principal holding core:admin, judged through rbac.Require so
-// the denial is audited. The auth-disabled principal has neither and is
-// refused.
+// RequireOwner is the adapter of HEAD's ownerGateWhenOwnerSet (Guards.Owner
+// with httpapi.LegacyRoute.OwnerWhenSet at stage 13): while
+// core.auth.owner.required holds (the injected OwnerRequired; nil reads as
+// true) the principal must carry AssuranceOwner, which only an OwnerVerifier
+// extension sets; while it does not, the gate passes every principal through
+// and the route's own credential guard and permission decide, as HEAD's gate
+// did with owner_email unset (F4-08 B10y). It has no core:admin fallback of
+// its own: that was 05-authn §4.8's native branch, which only core's own
+// owner routes keep. A request with no principal is still 401.
 func (b *Bridge) RequireOwner() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx := c.Request.Context()
-		p, ok := coreauth.PrincipalFrom(ctx)
+		p, ok := coreauth.PrincipalFrom(c.Request.Context())
 		if !ok {
 			unauthenticated(c)
 			return
@@ -142,11 +186,7 @@ func (b *Bridge) RequireOwner() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		if b.ownerRequired == nil || b.ownerRequired() || !p.Method.Interactive() {
-			forbidden(c, msgOwnerRequired)
-			return
-		}
-		if rbac.Require(ctx, rbac.CoreAdmin) != nil {
+		if b.ownerRequired == nil || b.ownerRequired() {
 			forbidden(c, msgOwnerRequired)
 			return
 		}

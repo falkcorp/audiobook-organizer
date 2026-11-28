@@ -108,7 +108,7 @@ type Route struct {
 	Method string
 	Path   string
 	// Writes is true for a route that edits or undoes an edit; it is gated by
-	// RequireAdmin whatever the caller passed as readGate.
+	// writeGate whatever the caller passed as readGate.
 	Writes bool
 }
 
@@ -118,12 +118,13 @@ type Route struct {
 // sit behind readGate; the server passes its adminRole gate, which is
 // RequireAdmin with authentication on and a pass-through with it off. The
 // three writes (the two PATCHes, preview included, and the undo) sit behind
-// servermiddleware.RequireAdmin whatever readGate is, so no caller can open
-// them and they answer 401 with authentication off. Both are the admin ROLE,
-// stricter than any single permission: a custom role granted settings.manage
-// does not pass. Production wiring and the tests both call this, so the tests
-// exercise the real gate.
-func (h *Handler) Register(rg *gin.RouterGroup, readGate gin.HandlerFunc) []Route {
+// writeGate whatever readGate is, so a read gate cannot open them. The server
+// passes its always-authenticated admin gate, which is RequireAdmin and so
+// answers 401 with authentication off; a writeGate must refuse an
+// unauthenticated caller. Both are the admin ROLE, stricter than any single
+// permission: a custom role granted settings.manage does not pass. Production
+// wiring and the tests both call this, so the tests exercise the real gates.
+func (h *Handler) Register(rg *gin.RouterGroup, readGate, writeGate gin.HandlerFunc) []Route {
 	g := rg.Group("/admin/debug")
 	reads := g.Group("")
 	reads.Use(readGate)
@@ -132,7 +133,7 @@ func (h *Handler) Register(rg *gin.RouterGroup, readGate gin.HandlerFunc) []Rout
 	reads.GET("/lookup", h.Lookup)
 	reads.GET("/edits", h.ListEdits)
 	writes := g.Group("")
-	writes.Use(servermiddleware.RequireAdmin())
+	writes.Use(writeGate)
 	writes.PATCH("/books/:id", h.PatchBook)
 	writes.PATCH("/book-files/:id", h.PatchBookFile)
 	writes.POST("/edits/:edit_id/undo", h.UndoEdit)

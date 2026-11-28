@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/internal/sdnotify"
@@ -68,7 +69,7 @@ func New(ctx context.Context, opts Options, mods ...module.Module) (*App, error)
 	// c.StoragePath and c.StateDir stay empty: core's P0 resolves both from the
 	// config layers (kernel.bootCoreConfig), as an offline command's
 	// kernel.ResolveStorage does, so serve and offline cannot disagree.
-	if declaresStorage(mods) {
+	if c.WantsStore() {
 		if c.StorageClaimsShadow, err = claimsShadow(opts); err != nil {
 			return nil, err
 		}
@@ -151,6 +152,14 @@ func (a *App) StorageAdmin() *storage.Admin { return a.k.StorageAdmin() }
 // module builds from this; the accessor is deleted when core reports them
 // itself. Zero, with no error, when New opened no store.
 func (a *App) CheckpointHealth() (storage.CheckpointHealth, error) { return a.k.CheckpointHealth() }
+
+// HealthSnapshot is the health registry's state now: each component with its
+// current Result, copied (05-health section 5H.3.1). ABO's books module reads it to
+// put the registry's posture tokens (core.auth's auth_disabled_remote, core.backup's
+// restore and journal tokens) on the authenticated degraded field of
+// GET /api/v1/system/status; the accessor goes when core serves that field
+// itself. Zero for an App whose kernel built no registry.
+func (a *App) HealthSnapshot() health.Snapshot { return a.k.HealthSnapshot() }
 
 // Handler is the fully assembled root handler (for tests and embedding in
 // another server). Valid after New. Embedding still needs Run: Handler alone
@@ -308,12 +317,6 @@ func lookupEnv(env []string, name string) string {
 	return ""
 }
 
-// declaresStorage reports whether any module of the app declares storage: the
-// condition under which the app has a store, whatever path resolves it.
-func declaresStorage(mods []module.Module) bool {
-	return slices.ContainsFunc(mods, func(m module.Module) bool { return m != nil && kernel.DeclaresStorage(m.Manifest()) })
-}
-
 // claimsShadow is core.storage.claims.mode (05-storage §5S.0 D-S2, §5S.9.4
 // step 2): until config (F3) its one layer is <EnvPrefix>_CORE_STORAGE_CLAIMS_MODE.
 // "strict" (the default, also when unset) refuses every out-of-claim access;
@@ -369,13 +372,19 @@ func kernelConfig(opts Options, mods []module.Module) (kernel.Config, error) {
 		ServiceName:           opts.ServiceName,
 		Version:               opts.Version,
 		ReservedAPINamespaces: slices.Clone(opts.ReservedAPINamespaces),
-		LegacyAuthGinUntil:    opts.LegacyAuthGinUntil,
 		Logger:                opts.Logger,
 		Modules:               slices.Clone(mods),
 		UI:                    opts.UI,
 		UIOptions:             opts.UIOptions,
 		FromRelease:           opts.FromRelease,
 		ExtendStart:           opts.R1ExtendStart,
+		IdentityBoot:          opts.IdentityBoot,
+		ResolveAtom:           opts.ResolveAtom,
+		DisplayName:           opts.DisplayName,
+		ArchivePrefix:         opts.ArchivePrefix,
+		AuthOptions:           opts.Auth,
+		Authenticators:        slices.Clone(opts.Authenticators),
+		AccountResolver:       opts.AccountResolver,
 	}
 	// The config boot's operator layers and the state directory's compiled
 	// default; the store path and the state directory are P0's.

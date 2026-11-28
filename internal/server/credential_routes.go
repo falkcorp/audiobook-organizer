@@ -18,7 +18,9 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // Credential-changing routes are registered ONLY through credRoute and
@@ -83,6 +85,24 @@ func (s *Server) credRouteWhen(g *gin.RouterGroup, method, rel string, guarded f
 }
 
 func (s *Server) credGuardMiddleware(guarded func(*gin.Context) bool) gin.HandlerFunc {
+	if gateTraceForTest != nil {
+		return gateTraceForTest(gateInfo{Kind: gateCred, Conditional: guarded != nil})
+	}
+	// Under core identity (WithIdentity, F4-08 B7) the principal's method
+	// decides (coreauth.Principal.MayChangeCredentials), and books' EnableAuth is
+	// not read: the auth-disabled principal is refused, as core tightens HEAD's
+	// pass-through on purpose (SEC5-8). A conditional route (credRouteWhen) has no
+	// gin guard under identity since B10g: its handler decides. POST
+	// /api/v1/auth/api-keys refuses a key that names another user itself
+	// (keyForAnotherUserMessage, B10rn STOP 2), and POST
+	// /api/v1/auth/api-keys/:id/rotate is the retired stub that answers 410 to
+	// every caller.
+	if s.identity != nil {
+		if guarded != nil {
+			return func(c *gin.Context) { c.Next() }
+		}
+		return legacyauth.RequireCredentialChange()
+	}
 	if !config.AppConfig.EnableAuth {
 		return func(c *gin.Context) { c.Next() }
 	}
@@ -132,6 +152,16 @@ func (s *Server) apiKeyOwnedByAnotherUser(c *gin.Context) bool {
 	caller, ok := servermiddleware.CurrentUser(c)
 	if !ok || caller == nil {
 		return true
+	}
+	if s.identity != nil {
+		// Under core identity the keys are core's (M3 drained books' rows):
+		// read the key as the caller, and refuse whatever cannot be read.
+		p, ok := coreauth.PrincipalFrom(c.Request.Context())
+		if !ok || s.identity.Admin == nil {
+			return true
+		}
+		k, err := s.identity.Admin.AdminAPIKey(c.Request.Context(), p, c.Param("id"))
+		return err != nil || k == nil || string(k.Owner) != caller.ID
 	}
 	key, err := s.storeForWiring().GetAPIKey(c.Param("id"))
 	if err != nil || key == nil {

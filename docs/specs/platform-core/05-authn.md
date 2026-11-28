@@ -135,6 +135,16 @@ type User struct {
 	// clears it; set on a last admin a restore had to keep (05-rbac §7.1,
 	// §4.14, SEC4-12).
 	SignInRestricted bool
+	// MergedInto is the user an admin user merge folded this account into, ""
+	// otherwise; MergedAt is when. The merge's own batch writes it with the
+	// disable. SetStatus refuses to enable a marked account (ErrMergedAway,
+	// 409 `merged_away`) because enabling would put a second live account back
+	// on sign-ins and data that now belong to MergedInto; the REST user view
+	// carries both (`merged_into_user_id`, `merged_at`). Both are omitted from
+	// the stored record while unset. HEAD's `merged_into_user_id` and
+	// `merged_at` import into them (§11).
+	MergedInto UserID
+	MergedAt   time.Time
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	Version         int64
@@ -201,6 +211,16 @@ type Identities interface {
 // ctx principal (core:users.manage, Interactive, dominance over both users,
 // and the owner rule of §4.8), so holding the handle grants nothing.
 type Admin interface {
+	// PlanUserMerge previews folding source into target (R1). It re-checks the
+	// principal exactly as StageUserMerge does, runs every refusal StageUserMerge
+	// runs, reads the records the merge moves (API keys, linked sign-ins, the
+	// allow-list row of the source's address) and returns the opaque plan
+	// StageUserMerge takes plus a MergeSummary of ids, counts and outcome codes.
+	// The plan keeps the stored bytes of those records inside auth, so a
+	// credential hash never reaches the module that asked for the preview; it
+	// pins both users' versions and every row it read. It stages and writes
+	// nothing.
+	PlanUserMerge(ctx context.Context, source, target UserID) (UserMergePlan, MergeSummary, error)
 	// StageUserMerge binds the auth Store to the caller's batch b and has it
 	// rewrite the owner of every record in plan from Source to Target
 	// (Store.StageMerge, R4-1), disables Source and bumps its
@@ -216,6 +236,25 @@ type Admin interface {
 	// does not make. AfterCommit re-reads Source and publishes only when the
 	// store shows the merge's write, so running it after a failed commit
 	// publishes nothing (F4-08 A15). It is nil whenever the error is not.
+	//
+	// Beyond the re-owning, the merge stages in b: the source's roles the target
+	// lacks, added to the target under the principal's dominance (dominance over
+	// the source covers every one of them; the stored role set is claimed with a
+	// guard, so a role edited before the commit fails it); HEAD's e-mail rule
+	// (the source's address is always cleared; the target keeps its own, else
+	// takes the source's with its verification; a same-address merge whose only
+	// verified side was the source leaves the target verified; a verified
+	// address another account holds is refused, ErrEmailInUse); the source's
+	// MergedInto/MergedAt marker. Two refusals are MergeRefusal values (match
+	// ErrMergeRefused, read with errors.As): `already_merged` (the source was
+	// merged before) and `no_sign_in` (the target would have no password and no
+	// linked sign-in once the merge's own sign-ins move to it), plus
+	// `email_linkable`, which core adds to HEAD's rules: a target that is not an
+	// admin and has no password may not gain a verified address it did not hold
+	// verified, because the OIDC resolver links a sign-in by address to exactly
+	// such an account; HEAD's plan cannot reach it (its survivor must be an
+	// admin). The last-admin rule for disabling the source holds too; the app
+	// cannot reach it, since books refuses a survivor that is not an admin.
 	StageUserMerge(ctx context.Context, b *storage.Batch, plan UserMergePlan) (AfterCommit, error)
 }
 
@@ -263,8 +302,21 @@ type Compat interface {
 // UserMergePlan is the auth half of an admin user merge; books builds it from
 // its preview (internal/usermerge stays in ABO).
 type UserMergePlan struct {
-	Source, Target UserID
-	Rows           []MergeRow
+	// unexported: source, target, both users' versions, the rows. Zero value =
+	// no plan, refused with ErrBadInput. Source() and Target() read the ids;
+	// printing a plan (%v, %+v, %#v, slog) shows the ids and a record count only.
+}
+
+// MergeSummary is what a preview may show an admin: ids, counts and outcome
+// codes, never a credential hash, a key secret or a token.
+type MergeSummary struct {
+	Source, Target    UserID
+	RolesTransferred  []rbac.RoleName
+	TargetHoldsAdmin  bool              // HEAD's plan refuses a survivor that is not an admin
+	Email             MergeEmailOutcome // none | kept | moved | verified_transferred | released_verified
+	APIKeys           []string          // ids of the source's keys that move
+	IdentityProviders []string          // the provider of each sign-in that moves
+	AllowListRows     int
 }
 
 type MergeRow struct {
@@ -347,6 +399,12 @@ type Options struct {
 	// CoreGroup(). GET /api/core/v1/auth/oidc/{provider}/start is served in
 	// every case.
 	OIDCCallbackBase string
+	// InviteSessionTTL is how long the session an accepted invite opens lives
+	// (§4.13). Zero (hello, new apps) gives it core.auth.session.remember_ttl.
+	// An app that already gave invited users a longer first session sets it
+	// (ABO 720h, HEAD parity: handlers/user.go:380). Compile-time, with no
+	// operator key; negative is refused by New.
+	InviteSessionTTL time.Duration
 }
 
 // Users. Every method that acts on another user takes the actor and enforces
@@ -659,8 +717,12 @@ type Store interface {
 	IdentityBySubject(ctx context.Context, provider, subject string) (*ExternalIdentity, error)
 	InviteAllowed(ctx context.Context, email string) (bool, error)
 
-	// StageMerge rewrites the owner of every record of plan (Admin.StageUserMerge).
-	StageMerge(b *storage.Batch, plan UserMergePlan) error
+	// MergeRows reads every record a merge of source moves, each with the stored
+	// bytes (Admin.PlanUserMerge); StageMerge re-owns them from source to
+	// target with an Expect on those bytes (Admin.StageUserMerge). Both are the
+	// embedded MergeStore, so the interface stays within the interface-width cap.
+	MergeRows(ctx context.Context, source UserID) ([]MergeRow, error)
+	StageMerge(b *storage.Batch, source, target UserID, rows []MergeRow) error
 }
 
 var ErrUndecodableRecord = errors.New("auth: stored identity record cannot be decoded")
@@ -743,7 +805,7 @@ unnecessary and keeps verification O(1).
 
 | Credential | Format | Lifetime | Stored as |
 |---|---|---|---|
-| Session | `mcs_<43>_<6>` | 24 h; remember-me 7 d; sliding `LastSeen` (idle timeout optional) | `SHA-256` key + public ULID |
+| Session | `mcs_<43>_<6>` | 24 h; remember-me 7 d; invite-accept `Options.InviteSessionTTL` when the app sets one (ABO 720 h), else remember-me (§4.13); sliding `LastSeen` (idle timeout optional) | `SHA-256` key + public ULID |
 | API key | `mck_<43>_<6>` | default 30 d, max 1096 d (today's values, `handlers/apikeys.go` `MaxAPIKeyTTLDays`) | `SHA-256` |
 | Bootstrap | `mcb_<43>_<6>` | 10 min, single use | `SHA-256` as a one-time token in the store + 0600 file |
 | Invite | `mci_<43>_<6>` | default 72 h (today, `handlers/user.go:177-181`), single use | `SHA-256` |
@@ -1092,7 +1154,10 @@ the config cutover, 05-config §1.12.2).
   every concrete scope that is neither `AuthRequired` nor `Sensitive`, has **no admin flag** and no
   implication from `core:admin` (05-rbac §4.11, SEC-2). `core:admin` itself is `AuthRequired`, so
   the always-authenticated class — store wipes, debug edits, credential surfaces
-  (`wire_admin_role.go:28-38`) — answers 401 with auth disabled, as today; read-only admin
+  (`wire_admin_role.go:28-38`) — is refused with auth disabled, as today, but with 403
+  `interactive_required` ("turn authentication on to use this route") rather than HEAD's 401 (ruling
+  G5(a), F4-08 B10sr: a 401 `authentication_required` ends the SPA's session, and a no-auth install has
+  no sign-in; see 05-rbac §4.11); read-only admin
   introspection stays open, as today's `adminRole` pass-through (05-rbac §6.2).
 - `MethodAuthDisabled` is non-interactive and may not change credentials, so every
   `Guards.Interactive` route (password, keys, sessions of others, temp-login, backup restore) is
@@ -1103,11 +1168,12 @@ the config cutover, 05-config §1.12.2).
   Books' `s.perm` routes keep HEAD's auth-off reach (05-rbac §4.11's auth-off evaluation rule).
 - **Credential metadata needs a user (SEC-3).** The auth-disabled principal has `User == nil`, and HEAD
   answers 401 to these reads when no user is bound (`handlers/apikeys.go:259-264` @748fd787a; with auth
-  off HEAD's middleware binds none). So `internal/authhttp` refuses that principal with 401
-  `authentication_required` on every route of §4.13 that lists or reads keys, sessions or the caller's
+  off HEAD's middleware binds none). So `internal/authhttp` refuses that principal with 403
+  `interactive_required` (HEAD's 401 would end a no-auth install's SPA session, ruling G5(a); a nil
+  principal, auth on with no credential, keeps 401 `authentication_required`) on every route of §4.13 that lists or reads keys, sessions or the caller's
   own profile (`/me*`, `/api-keys*`, `/users/{id}/sessions*`, `/users/{id}/api-keys*`), before the
   handler runs, as credential routes already refuse it; and `core:audit.view` is `AuthRequired`
-  (05-rbac §6.1), so the audit query and export answer 401 too. Key names, scopes, last-use addresses,
+  (05-rbac §6.1), so the audit query and export answer 403 `interactive_required` too. Key names, scopes, last-use addresses,
   session addresses and the audit trail therefore stay behind a credential on a remote-reachable
   auth-off install.
 - `disabled` refuses to start when a listener is bound to a non-loopback address **or** any trusted
@@ -1234,7 +1300,7 @@ PR deletes books' gin handlers for both, and the two patterns are the only core 
 | `GET /me/sessions`, `DELETE /me/sessions/{publicID}` | `core:self` | user required; `DELETE`: Interactive |
 | `GET/POST /me/api-keys`, `PATCH/DELETE /me/api-keys/{id}` | `core:self` | user required; key may manage only keys it may create (§4.4) |
 | `GET /api-keys` (every user's keys, each with its owner's username; HEAD's admin list `GET /api/v1/auth/api-keys?all=true`, `internal/server/handlers/apikeys.go:258-303` @748fd787a) | `core:users.manage` | user required (§4.11, SEC-3); lists only the caller's own keys and those of owners whose roles the caller dominates (the filter runs before the page is cut, so `total` does not count what is withheld; a key whose owner no longer exists needs `core:admin`), the same reach as `GET /api-keys/{id}` and `/users/{id}/api-keys` |
-| `GET /api-keys/{id}`, `PATCH /api-keys/{id}`, `DELETE /api-keys/{id}` (any key by ID) | `core:self` | user required; the key's owner, or a principal holding `core:users.manage` with dominance over the owner (HEAD's rule, `apikeys.go:323,353,402`); writes Interactive as on `/me/api-keys/{id}`; a key may manage only keys it may create (§4.4) |
+| `GET /api-keys/{id}`, `PATCH /api-keys/{id}`, `DELETE /api-keys/{id}` (any key by ID) | `core:self` | user required; the key's owner, or a principal holding `core:users.manage` with dominance over the owner (HEAD checked `users.manage` only, `isAdminUser` in `internal/server/handlers/apikeys.go`; dominance is core's rule, adopted under SEC-4); writes Interactive as on `/me/api-keys/{id}`; a key may manage only keys it may create (§4.4) |
 | `GET /users`, `GET /users/{id}` | `core:users.view` | — |
 | `POST /users/invites`, `DELETE /users/invites/{id}` | `core:users.manage` | Interactive; invite role via `CanAssign` |
 | `POST /users/{id}/disable`, `…/enable`, `DELETE /users/{id}`, `POST /users/{id}/reset-password`, `PUT /users/{id}/roles` | `core:users.manage` | Interactive; dominance |
@@ -1251,6 +1317,13 @@ re-runs `rbac.CanAssign` for the creator over that role and refuses (`invite_inv
 `core.invite.accept` with `Outcome: denied`) when the check fails or the creator no longer exists, so
 an invite whose creator was demoted after issuing it never yields an account in a role the creator can
 no longer assign.
+
+**Invite-accept session lifetime.** The session an accepted invite opens (`OriginInvite`) lives
+`Options.InviteSessionTTL` when the app sets one (ABO: 720 h, HEAD parity: its accept-invite opens a
+30-day session, `handlers/user.go:380`, longer than its 7-day remember-me login), else
+`core.auth.session.remember_ttl`. There is no operator key for it, and an operator's
+`remember_ttl` does not shorten an app-set invite lifetime. A password sign-in, remember-me or
+plain, keeps `core.auth.session.remember_ttl` or `core.auth.session.ttl` whatever the option says.
 
 **Invite delivery (SIMP2-4, R-F).** Invite e-mail uses a `mail.Sender` built from the `notify/email`
 integration instance (05-notify, 05-metadata); until R2's integrations flip (F7) is on `main`, it is
@@ -1398,7 +1471,9 @@ applied once by the identity cutover (§11).
 | Stored identity record cannot be decoded by the store (unknown status, malformed JSON; `ErrUndecodableRecord`) | the record is treated as restricted (user inactive, key refused) and counted; boot continues | closed | fail closed on damaged data |
 | A HEAD user, API-key or OAuth-identity row the cutover cannot decode, or that `Importer` rejects (`ErrImportRejected`; a key or identity whose user does not exist included) | the upgrade stops before any write: the cutover preflight refuses the boot (`storage.ErrCutoverBlocked`, exit 78) before the checkpoint and M7 (on a store whose cutover has not started; a resumed cutover relies on M3's own check, §11), with a report naming each row by key and reason, never its value; `<app> storage cutover-blockers` fixes or deletes it (§11); nothing is quarantined | closed | D13: an identity is never imported partly or dropped |
 | A HEAD user-merge journal that is `applying` or `undoing` | the upgrade stops before any write, naming the journal; the owner finishes or undoes the merge on the pre-freeze release first (§11) | closed | D13; the merge's HEAD writes cannot be completed on the native store (DATA-4) |
-| Undo of a merge finished before R2 | refused (409 `merge_permanent`) | closed | D13: finished merges are permanent after R2 |
+| Undo of a merge finished before R2 (a journal with no core half) | refused (409 `merge_permanent`) | closed | D13: a merge the pre-freeze release made is permanent after R2 |
+| Undo of a merge made after R2 (`Admin.PlanUserUnmerge` / `StageUserUnmerge`) | whole or refused: 409 with the first mismatch's code (`not_merged`, `source_changed`, `source_deleted`, `target_deleted`, `target_inactive`, `target_merged`, `email_claimed`, `key_moved`, `signin_moved`), 409 `last_admin`, 403 on denial or dominance; books adds 409 `sweep_pending` and `receipt_missing`; nothing is written for a refusal | closed | the undo restores only what the merge left exactly as it left it |
+| Resume of a merge journal after R2 | only an applied merge whose straggler sweep is pending (`sweep_pending`) re-runs the idempotent sweep and clears the marker; every other resume is 409 `merge_permanent` | closed | an R2 merge is one batch, so nothing else is half-applied |
 | User with `SignInRestricted` | every authenticator refuses: 401 `password_reset_required` | closed | restricted last admin (SEC4-12) |
 | Invite whose creator no longer may assign its role | `invite_invalid`, audited | closed | SEC3-2 |
 | Replaced store, as 05-backup §5B.3.6 (2) classifies it (content marker, out-of-store journal head), verified tail or not; a relocated store is not replaced and runs no hook | tail re-applied, then the hook with `rc.Revocations == nil`: every session and invite deleted, every active or disabled key `needs_confirmation`, every epoch bumped; a chain break adds health `revocation_journal_broken` | closed | SEC3-10, SEC4-6, SEC5-6, DATA6-4, DATA6-5 |
@@ -1411,7 +1486,7 @@ applied once by the identity cutover (§11).
 | Key create by a key whose effective set is empty (nil caller permission set) | 403 `scope_escalation`, nothing written | closed | the empty set grants nothing to delegate (SEC9-5) |
 | Action on a user the actor does not dominate | 403 `dominance_required` | closed | SEC-4 |
 | A compat surface's password, key or principal call for a `SignInRestricted` or `PasswordResetRequired` user, a `needs_confirmation` key, or a password or principal call from a throttled source | refused by `auth.Compat` (`ErrResetRequired`; `ErrThrottled` for the throttled source; for the key, the failure stage 12 records), surfaced in the surface's own error shape | closed | SEC-1: no second auth stack outside core's rules |
-| Credential-metadata or audit route with the auth-disabled principal | 401 `authentication_required` | closed | SEC-3; HEAD's `CurrentUser` 401 |
+| Credential-metadata or audit route with the auth-disabled principal | 403 `interactive_required` (ruling G5(a); HEAD's `CurrentUser` answered 401, which would end the SPA session) | closed | SEC-3 |
 | Facade key off its facade group, or general key on a facade group (deferred-build, §3.5) | 403 `permission_denied` | closed | SEC-5 |
 | OIDC subject whose email matches an unlinkable account | 409 `email_in_use` | closed | SEC-7 |
 | Remove last `core:admin` holder | 409 `last_admin` | closed | lockout protection |
@@ -1461,7 +1536,7 @@ interactive method). Every key that decides who may sign in, with which role, or
 | `core.auth.mode` | enum `required`/`disabled`, declared `config.FailClosed("core.auth.mode", "\"required\"", "\"disabled\"")` (most restrictive first; 05-config §1.3.1): an operator value and a stored value that disagree resolve to the more restrictive one (§4.11) | `required` | no | owner (SEC3-6, §4.8); never changed by the auth-disabled principal (SEC4-8) |
 | `core.auth.disabled_allow_remote` | bool | false (ABO: true, §4.11) | no | admin |
 | `core.auth.session.ttl` | duration | 24h | yes (new sessions) | none |
-| `core.auth.session.remember_ttl` | duration | 168h | yes | none |
+| `core.auth.session.remember_ttl` | duration | 168h (remember-me sign-ins; also the invite-accept session unless `Options.InviteSessionTTL` is set, §4.13) | yes | none |
 | `core.auth.session.idle_timeout` | duration | 0 (off) | yes | none |
 | `core.auth.session.cookie_name` | string | `<AppID>_session` | no | admin |
 | `core.auth.session.cookie_host_prefix` | bool | true | no | admin |
@@ -1555,7 +1630,7 @@ Names are shown under core's default metric namespace `mediacore`; an app passes
 | `TestOAuthStart_HEADPathServedByCore` | (ABO, fake IdP, from F4; SAFETY-11) HEAD's start `GET /api/v1/auth/oauth/{provider}/start` reaches core's start handler through the whole core chain (`RouteInfo.Owner` `core`, Public, `RateAuth`), no gin handler serves it, and it answers as `GET /api/core/v1/auth/oidc/{provider}/start` does, one cell per `AppHandoff` rule of §4.7: no app fields → an ordinary web sign-in that completes at HEAD's callback; a listed `redirect_uri` (and, in its own cell, `callback`) of `audiobooth://oauth` with an S256 `code_challenge` → the callback calls `AppHandoff.Mint`, redirects to the app scheme with the code and the app's state, and no web session record exists; only one of the two → ordinary web sign-in; an unlisted or prefix-extended `redirect_uri` → inline 400 with no `Location` header; `code_challenge_method` `plain` → 400 |
 | `TestOIDC_AppHandoffMintsABSCode` | (ABO, fake IdP, from F4; SEC-2) one cell per control of §4.7's hand-off: both `redirect_uri` (or `callback`) and `code_challenge` present → the callback calls `AppHandoff.Mint`, redirects to the app scheme with the code and the app's state, and no web session record exists; only one of them → ordinary web sign-in; an unlisted, prefix-extended or userinfo-bearing `redirect_uri` → inline 400 with no `Location` header; `code_challenge_method` `plain` or missing → 400; the code redeems once at the ABS route `/auth/openid/callback` and is refused after the user's epoch is bumped (port of HEAD's `internal/server/oauth_app_code_epoch_integration_test.go`); a `SignInRestricted` user gets no code |
 | `TestCompat_ABSLoginHonoursRestrictions` | (ABO, SEC-1) through `Deps.AuthCompat` only: the ABS password login, an ABS JWT, an `abk_` key and the Cloudflare Access login path, each against a `SignInRestricted` user, a `PasswordResetRequired` user (password, JWT and Cloudflare paths) and a `needs_confirmation` key (key path) → refused; a JWT or Cloudflare call from a source whose throttle is spent → refused; a refused `PrincipalFor` call records no failure (30 stale-epoch JWT calls from one source, then the same source's password login succeeds, and a wrong password still counts); a good password is throttled with web logins and rehashed from bcrypt; books' module holds no `*auth.Service` (archtest) |
-| `TestAuthOff_CredentialMetadataNeedsUser` | (SEC-3) auth disabled: `GET /me`, `/me/sessions`, `/me/api-keys`, `/api-keys`, `/api-keys/{id}`, `/users/{id}/sessions`, `/users/{id}/api-keys`, `/audit` and `/audit/export` → 401 `authentication_required`, nothing listed |
+| `TestAuthOff_CredentialMetadataNeedsUser` | (SEC-3) auth disabled: `GET /me`, `/me/sessions`, `/me/api-keys`, `/api-keys`, `/api-keys/{id}`, `/users/{id}/sessions`, `/users/{id}/api-keys`, `/audit` and `/audit/export` → 403 `interactive_required` (G5(a)), nothing listed; with auth on and no credential, 401 `authentication_required` |
 | `TestFirstRun_OnlyPublicAndSetupReachable` | zero users: every non-Public route 401 |
 | `TestSetup_RequiresBootstrapToken` / `TestSetup_LoopbackExceptionRefusesForwarded` | loopback peer with a forwarding header, or a trusted-proxy peer, is not local (SEC-30) |
 | `TestBootstrapRedeemedOnce` | `testing/synctest`, 50 concurrent redeems, exactly 1 success |
@@ -1693,7 +1768,20 @@ the boot while any journal is `applying` or `undoing`, naming it: the owner rein
 release, finishes or undoes the merge there, and deploys R2 again. A finished merge (`done` or `undone`)
 becomes **permanent**: its journal is kept read-only for display, books' undo action answers 409
 `merge_permanent` for it, and the R2 release note says "Account merges finished before this release can
-no longer be undone." `auth.Admin` has no inverse of `StageUserMerge`, so no merge is undone after R2.
+no longer be undone." A merge made after R2 is different: `auth.Admin` has the inverse of `StageUserMerge`,
+`PlanUserUnmerge` and `StageUserUnmerge`, and books' undo commits its own inverse rows, the undone journal and
+core's half in ONE batch (the caller's-batch convention: `StageUserUnmerge` never commits). The reversal is
+whole or refused. It restores the merged-away account to the status the merge found, with a fresh credential
+epoch so no session or token from before the merge returns, gives back its address, keys and sign-ins, takes
+off the target the roles the merge gave it, ends the target's sessions only when a sign-in moves back, and
+refuses with a code when the first record has changed since the merge: `not_merged`, `source_changed`,
+`source_deleted`, `target_deleted`, `target_inactive`, `target_merged`, `email_claimed`, `key_moved` or
+`signin_moved`; a removal that would leave no active admin is `ErrLastAdmin`. The actor needs the same
+authority as the merge: users.manage, dominance over both accounts, and the right to assign the roles it
+removes. The merge journal records the moved sign-ins' subject ids and the committed key versions (journal
+only, never in a preview or a response). An undo does not re-add a guest's Cloudflare access or phone key;
+an admin reissues them. A merge whose straggler sweep did not finish (`sweep_pending`) is refused for undo
+until a resume has finished the sweep.
 M3 rewrites each kept journal once, in its own chunk, replacing every `invite:<token>` key in its images
 by the token's SHA-256, since the invites themselves are deleted (the table above), so no raw invite token stays in
 the live store. Test: 05-storage's `TestCutoverRefusedWhileMergeInProgress` (§10).

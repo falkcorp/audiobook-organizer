@@ -7,10 +7,1222 @@
 // Source of truth: core/openapi/core.json, emitted by core/examples/hello's
 // `openapi` subcommand. Regenerate with `npm run generate -w @mediacore/api-client`.
 
-export type paths = Record<string, never>;
+export type paths = {
+    "/api/core/v1/api-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List every user's API keys
+         * @description Each key carries its owner's username. Never the key or its hash. Lists the caller's own keys and those of owners whose roles the caller dominates; the rest are left out before the page is cut, so the total does not count them. A key whose owner no longer exists needs core:admin.
+         */
+        get: operations["core_listAllAPIKeys"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/api-keys/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one API key by ID
+         * @description The owner's, or a manager's who dominates the owner. Any other caller gets the answer a missing key gets.
+         */
+        get: operations["core_getAPIKey"];
+        put?: never;
+        post?: never;
+        /** Revoke any key by ID */
+        delete: operations["core_revokeAPIKey"];
+        options?: never;
+        head?: never;
+        /**
+         * Disable, re-enable or revoke any key by ID
+         * @description Re-enabling needs an interactive sign-in; another user's key needs an interactiveOnly() manager who dominates the owner.
+         */
+        patch: operations["core_setAPIKeyStatus"];
+        trace?: never;
+    };
+    "/api/core/v1/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Query the audit log, newest first
+         * @description Filters: since and until (RFC 3339), actor (a user id), action (a prefix such as core.auth.), outcome (success, failure, denied, error) and target (module, module/kind or module/kind/id). The cursor continues a query with the same filters. A record whose action is about an identity or a credential (core.auth.*, core.user.*, core.apikey.*, core.session.*, core.invite.*, core.templogin.*, core.identity.*, core.bootstrap.*, core.permission.deny and the like), and a record whose action core does not classify (a module's own), is left out unless the caller holds core:users.manage, who also alone sees actor.credential_id and actor.client_addr. A caller without core:users.manage has withheld records read and dropped by the query, at most 10,000 per request: a page may then be short or empty with a next_cursor, and the client follows cursors until there is none. The auth-disabled principal is refused with 403 interactive_required.
+         */
+        get: operations["core_listAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/audit/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export the audit log as NDJSON
+         * @description The same filters as the query, without a cursor or limit; one JSON record per line, newest first, each as the query returns it. The export is recorded (core.audit.export) before the first line and does not start if that record cannot be written. A read that fails part-way ends the stream with the line {"error":"export_incomplete"}.
+         */
+        get: operations["core_exportAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/auth/bootstrap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Exchange the bootstrap token for an administrator API key
+         * @description The key and a generated password (when the account is created) are shown once. A wrong, expired or spent token is the same 401 bootstrap_invalid.
+         */
+        post: operations["core_redeemBootstrapToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/auth/invites/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept an invite: create the account and open a session
+         * @description Sets the session cookie. The invite is re-checked at this moment: its creator must still exist and still be able to assign its role.
+         */
+        post: operations["core_acceptInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/auth/invites/lookup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Show what an invite token would create
+         * @description The token travels in the body. An unknown, spent or expired token is the same 401 link_invalid.
+         */
+        post: operations["core_lookupInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign in with a username and password
+         * @description Sets the session cookie; the body carries no token. An unknown name, a wrong password and an account without a password are the same 401 invalid_credentials.
+         */
+        post: operations["core_login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** End the current session and clear its cookie */
+        post: operations["core_logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/auth/oidc/{provider}/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Finish a sign-in at the provider's redirect
+         * @description Opens a web session, or on the native-app branch mints the app's code before any session exists and redirects to the app.
+         */
+        get: operations["core_completeOIDC"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/auth/oidc/{provider}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Send the browser to an identity provider
+         * @description redirect_uri (alias callback) with code_challenge selects the native-app branch: an unlisted redirect_uri is an inline 400 with no Location, a method other than S256 is a 400.
+         */
+        get: operations["core_startOIDC"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/auth/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the enabled OIDC providers
+         * @description Ids and kinds only: never a client id or a secret.
+         */
+        get: operations["core_listAuthProviders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/auth/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create the first administrator
+         * @description Open only while no user exists, and then only with the bootstrap token or from a local request (05-authn §4.6). Once setup is closed (a user exists, or the caller may not use it) the answer is 403 setup_closed whatever the body says, so a closed setup reveals nothing. While it is open, a wrong, expired or spent bootstrap token is 401 bootstrap_invalid.
+         */
+        post: operations["core_setupFirstAdmin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/auth/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Whether the app has users and whether authentication is on */
+        get: operations["core_getAuthStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/auth/temp-login/consume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Spend a temp-login or reset link and open a session
+         * @description Sets the session cookie. A reset link needs new_password, a plain link refuses it.
+         */
+        post: operations["core_consumeTempLogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The signed-in user, its scopes and how it signed in */
+        get: operations["core_getMe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change the caller's own profile
+         * @description An e-mail change is an identity change: it clears the verified mark and revokes what the old address granted.
+         */
+        patch: operations["core_updateMe"];
+        trace?: never;
+    };
+    "/api/core/v1/me/api-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the caller's API keys
+         * @description Never the key itself or its hash.
+         */
+        get: operations["core_listMyAPIKeys"];
+        put?: never;
+        /**
+         * Mint an API key for the caller
+         * @description The key is shown once. Every scope must be held by the caller now; a key mints only for itself and only within its own expiry (05-authn §4.4).
+         */
+        post: operations["core_createMyAPIKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/me/api-keys/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke one of the caller's keys */
+        delete: operations["core_revokeMyAPIKey"];
+        options?: never;
+        head?: never;
+        /**
+         * Disable, re-enable or revoke one of the caller's keys
+         * @description A key manages only keys it may create; re-enabling needs an interactive sign-in, disabling and revoking do not (a restriction widens nothing).
+         */
+        patch: operations["core_setMyAPIKeyStatus"];
+        trace?: never;
+    };
+    "/api/core/v1/me/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change the caller's own password
+         * @description Self only: {current, new}. There is no target-user field; an admin sends a reset link instead. Every other session of the account ends.
+         */
+        put: operations["core_changeMyPassword"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/me/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the caller's open sessions
+         * @description Public IDs only, never a token.
+         */
+        get: operations["core_listMySessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/me/sessions/{publicID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** End one of the caller's sessions */
+        delete: operations["core_revokeMySession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/modules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The server manifest: core and app identity, the enabled modules and what UI each may contribute
+         * @description The shell intersects this list with its compile-time registry and drops what is not declared (07 §7.5). A disabled module is absent from modules; disabled_modules lists them for a caller holding core:admin and is absent for every other caller.
+         */
+        get: operations["core_listModules"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/openapi/{file}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The OpenAPI 3.1 document of one owner, as <owner>.json
+         * @description Takes <owner>.json, the owner being core or a module ID. A caller who is not signed in gets 401 unless core.http.openapi.public is true; an unknown owner is 404. The body is the document the build produced, byte for byte.
+         */
+        get: operations["core_getOpenAPIDocument"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the roles, seed and custom, with their permissions and pending seed additions
+         * @description Newest release additions waiting for an administrator are in pending_seed (05-rbac §4.8). A stored role that cannot be decoded is left out and logged.
+         */
+        get: operations["core_listRoles"];
+        put?: never;
+        /**
+         * Create a custom role
+         * @description name is custom.<slug>. The caller must hold every permission it names (a wildcard needs the pattern itself or core:admin): 403 scope_escalation otherwise. A name in use is 409 role_exists.
+         */
+        post: operations["core_createRole"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/roles/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a role
+         * @description version is what a write names in If-Match.
+         */
+        get: operations["core_getRole"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete an unassigned custom role
+         * @description Needs If-Match: the role's version. A role any user holds is 409 role_in_use: ?reassign= is not built, so take the role from its holders first. admin is 409 role_locked and a seed role 409 seed_role_locked.
+         */
+        delete: operations["core_deleteRole"];
+        options?: never;
+        head?: never;
+        /**
+         * Change a custom role's title, description or permissions
+         * @description Needs If-Match: the role's version (428 without it, 412 when it is stale). A field the body omits keeps its value; permissions replaces the set. The caller must hold every permission of the old and the new set (403 scope_escalation). admin is 409 role_locked and a seed role 409 seed_role_locked. A change that takes core:admin from the last role that grants it to an active user is 409 last_admin.
+         */
+        patch: operations["core_updateRole"];
+        trace?: never;
+    };
+    "/api/core/v1/roles/{name}/accept-seed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Make a seed role's pending release additions effective
+         * @description The one write a seed role allows (05-rbac §4.8). Needs If-Match: the role's version. The caller must hold every permission of the resulting set (403 scope_escalation). A role with nothing pending is 409 no_pending_seed.
+         */
+        post: operations["core_acceptRoleSeed"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every key of the sections the caller may read, as {path: key state}
+         * @description A secret key shows only whether a value is set, its source and who wrote it; never a value, a mask or a hash.
+         */
+        get: operations["core_getSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Store and unset settings in one commit
+         * @description Body {set: {path: value}, unset: [path]}. 400 unknown_key; 403 permission_denied (need: key to the section's write permission) or protection_required (need: key to the protection level); 409 locked (locked_by: key to the operator layer); 422 validation_failed (one error per key); 500 on a storage failure. 200 carries restart_pending and post_commit_error when present. A secret key's value is a JSON string and is never returned.
+         */
+        patch: operations["core_updateSettings"];
+        trace?: never;
+    };
+    "/api/core/v1/settings/schema": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The settings schema (JSON Schema 2020-12), one property per section the caller may read
+         * @description Vendor keywords: x-mediacore-reload, x-mediacore-protect, x-mediacore-secret, x-mediacore-fail-closed; secret keys carry writeOnly.
+         */
+        get: operations["core_getSettingsSchema"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/system/factory-reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stage a factory reset; it runs when the service restarts
+         * @description Body {kind: "factory" (default) or "store", confirm: "RESET", delete_library_files?: bool (default false), library_root?, library_file_count?}. 422 confirm_required without the confirm; 422 library_files_confirm_required, carrying the current library_root and library_file_count, when delete_library_files is true and they do not match the preflight; 422 reset_request_invalid; 400 reset_refused; 409 swap_pending. Nothing is staged on any refusal. 200 {reset_id, message} plus library_root and library_file_count when files will be deleted. Files deleted by a reset are not restored.
+         */
+        post: operations["core_factoryReset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/ui/csp-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Receive a browser's Content-Security-Policy violation report
+         * @description Accepts application/csp-report (report-uri), application/reports+json (Reporting API, an array) and application/json, at most ten reports per request. Public because a browser sends a report with no credential. Only the violated directive is read, matched against the CSP directive names (anything else is counted as other); no URL or blocked-uri is logged or kept. Answers 204 for any well-formed request, whether or not it held a report.
+         */
+        post: operations["core_reportCSPViolation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/ui/diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Report one UI diagnostic
+         * @description The shell reports each diagnostic kind once per page load (07 §7.5.2). Only kind and module are read, and both are matched against closed lists: an unknown kind or module is counted as other, and no submitted text is logged or kept. Answers 204 whether or not the server accepts diagnostics.
+         */
+        post: operations["core_reportUIDiagnostic"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List users
+         * @description Filter by status or role.
+         */
+        get: operations["core_listUsers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/users/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one user */
+        get: operations["core_getUser"];
+        put?: never;
+        post?: never;
+        /** Delete a user */
+        delete: operations["core_deleteUser"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/users/{id}/api-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List one user's API keys */
+        get: operations["core_listUserAPIKeys"];
+        put?: never;
+        /**
+         * Mint an API key for another user
+         * @description Needs dominance over the user and scopes the user's roles hold too. The key is shown once.
+         */
+        post: operations["core_createUserAPIKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/users/{id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disable a user */
+        post: operations["core_disableUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/users/{id}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Enable a user */
+        post: operations["core_enableUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/users/{id}/reset-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint a password reset link for a user
+         * @description There is no route that sets another user's password. The link is shown once and ends every session of the user.
+         */
+        post: operations["core_resetUserPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/users/{id}/review-admin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acknowledge one core:admin holder a restore listed for review
+         * @description After a restore with no pre-swap store every core:admin holder is listed for review, and health reports restore_admins_review until an interactive core:admin session has acknowledged each one (05-rbac 7.1); this route acknowledges the holder in the path and audits core.role.review_admin. The holder is looked up in the restore report, not among the users: an account that is not listed (never listed, already acknowledged, or deleted and acknowledged since) is 404 not_found, so acknowledging twice answers 404 the second time and records nothing. Acknowledging yourself is allowed.
+         */
+        post: operations["core_acknowledgeAdminReview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/users/{id}/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Replace a user's roles */
+        put: operations["core_setUserRoles"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/users/{id}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a user's open sessions */
+        get: operations["core_listUserSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/users/{id}/sessions/{publicID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** End one of a user's sessions */
+        delete: operations["core_revokeUserSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/users/{id}/temp-login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint a temp-login link for a user
+         * @description The link is shown once.
+         */
+        post: operations["core_mintTempLogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/users/invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List open invites
+         * @description Never a token or a link.
+         */
+        get: operations["core_listInvites"];
+        put?: never;
+        /**
+         * Invite a user
+         * @description The role must be one the caller may assign. The link is shown once.
+         */
+        post: operations["core_createInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/users/invites/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete an open invite */
+        delete: operations["core_deleteInvite"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+};
 export type webhooks = Record<string, never>;
 export type components = {
     schemas: {
+        "core.APIKey": {
+            /** Format: date-time */
+            created_at: string;
+            description?: string;
+            /** Format: date-time */
+            expires_at?: null | string;
+            id: string;
+            imported: boolean;
+            /** Format: date-time */
+            last_used_at?: null | string;
+            last_used_ip?: string;
+            name: string;
+            owner: string;
+            owner_username?: string;
+            /** Format: date-time */
+            revoked_at?: null | string;
+            scopes: null | string[];
+            status: string;
+            use_count: number;
+        };
+        "core.BootstrapRequest": {
+            token: string;
+        };
+        "core.BootstrapResult": {
+            /** Format: date-time */
+            expires_at: string;
+            generated_password?: string;
+            key: string;
+            key_id: string;
+            user: {
+                /** Format: date-time */
+                created_at: string;
+                display_name?: string;
+                email?: string;
+                email_verified: boolean;
+                has_password: boolean;
+                id: string;
+                /** Format: date-time */
+                merged_at?: string;
+                merged_into_user_id?: string;
+                password_reset_required: boolean;
+                roles: null | string[];
+                sign_in_restricted: boolean;
+                status: string;
+                /** Format: date-time */
+                updated_at: string;
+                username: string;
+            };
+        };
+        "core.CursorPage_AuditRecord": {
+            items: null | {
+                action: string;
+                actor: {
+                    client_addr: string;
+                    credential_id: string;
+                    method: string;
+                    user_agent: string;
+                    user_id: string;
+                    username: string;
+                };
+                coalesced: number;
+                details?: {
+                    [key: string]: unknown;
+                };
+                id: string;
+                outcome: string;
+                permission: string;
+                reason: string;
+                request_id: string;
+                route: string;
+                seq: number;
+                target: {
+                    id: string;
+                    kind: string;
+                    module: string;
+                };
+                /** Format: date-time */
+                time: string;
+                trace_id: string;
+            }[];
+            next_cursor?: string;
+        };
+        "core.FactoryResetResponse": {
+            library_file_count?: null | number;
+            library_root?: string;
+            message: string;
+            reset_id: string;
+        };
+        "core.InviteAccept": {
+            password: string;
+            token: string;
+        };
+        "core.InviteCreate": {
+            email?: string;
+            role: string;
+            ttl?: string;
+            username: string;
+        };
+        "core.InviteCreated": {
+            invite: {
+                /** Format: date-time */
+                created_at: string;
+                created_by: string;
+                email?: string;
+                /** Format: date-time */
+                expires_at: string;
+                id: string;
+                role: string;
+                username: string;
+            };
+            link: string;
+        };
+        "core.InviteLookup": {
+            token: string;
+        };
+        "core.InvitePreview": {
+            email?: string;
+            /** Format: date-time */
+            expires_at: string;
+            role: string;
+            username: string;
+        };
+        "core.KeyCreate": {
+            description?: string;
+            /** Format: date-time */
+            expires_at?: null | string;
+            expires_in?: null | string;
+            name: string;
+            scopes: null | string[];
+        };
+        "core.KeyCreated": {
+            api_key: {
+                /** Format: date-time */
+                created_at: string;
+                description?: string;
+                /** Format: date-time */
+                expires_at?: null | string;
+                id: string;
+                imported: boolean;
+                /** Format: date-time */
+                last_used_at?: null | string;
+                last_used_ip?: string;
+                name: string;
+                owner: string;
+                owner_username?: string;
+                /** Format: date-time */
+                revoked_at?: null | string;
+                scopes: null | string[];
+                status: string;
+                use_count: number;
+            };
+            key: string;
+        };
+        "core.KeyStatus": {
+            status: string;
+        };
+        "core.LinkCreated": {
+            link: string;
+        };
+        "core.LoginRequest": {
+            password: string;
+            remember?: boolean;
+            username: string;
+        };
+        "core.Me": {
+            method: string;
+            owner_verified: boolean;
+            permissions: null | string[];
+            user: {
+                /** Format: date-time */
+                created_at: string;
+                display_name?: string;
+                email?: string;
+                email_verified: boolean;
+                has_password: boolean;
+                id: string;
+                /** Format: date-time */
+                merged_at?: string;
+                merged_into_user_id?: string;
+                password_reset_required: boolean;
+                roles: null | string[];
+                sign_in_restricted: boolean;
+                status: string;
+                /** Format: date-time */
+                updated_at: string;
+                username: string;
+            };
+        };
+        "core.ModulesResponse": {
+            app: {
+                display_name: string;
+                id: string;
+                ui_build_id: string;
+                version: string;
+            };
+            core: {
+                version: string;
+            };
+            disabled_modules?: null | string[];
+            modules: null | {
+                display_name: string;
+                id: string;
+                ui: {
+                    activity_panes: null | string[];
+                    banners: null | string[];
+                    nav: null | string[];
+                    pages: null | string[];
+                    settings_panels: null | string[];
+                    setup_steps: null | string[];
+                    top_bar_items: null | string[];
+                    user_page: null | string[];
+                    widgets: null | string[];
+                };
+                version: string;
+            }[];
+            restart_required: boolean;
+        };
+        "core.Page_APIKey": {
+            count: number;
+            items: null | {
+                /** Format: date-time */
+                created_at: string;
+                description?: string;
+                /** Format: date-time */
+                expires_at?: null | string;
+                id: string;
+                imported: boolean;
+                /** Format: date-time */
+                last_used_at?: null | string;
+                last_used_ip?: string;
+                name: string;
+                owner: string;
+                owner_username?: string;
+                /** Format: date-time */
+                revoked_at?: null | string;
+                scopes: null | string[];
+                status: string;
+                use_count: number;
+            }[];
+            limit: number;
+            offset: number;
+            total: number;
+        };
+        "core.Page_Invite": {
+            count: number;
+            items: null | {
+                /** Format: date-time */
+                created_at: string;
+                created_by: string;
+                email?: string;
+                /** Format: date-time */
+                expires_at: string;
+                id: string;
+                role: string;
+                username: string;
+            }[];
+            limit: number;
+            offset: number;
+            total: number;
+        };
+        "core.Page_RbacRole": {
+            count: number;
+            items: null | {
+                /** Format: date-time */
+                created_at: string;
+                description: string;
+                locked: boolean;
+                name: string;
+                origin: string;
+                pending_seed: null | string[];
+                permissions: null | string[];
+                title: string;
+                /** Format: date-time */
+                updated_at: string;
+                version: number;
+            }[];
+            limit: number;
+            offset: number;
+            total: number;
+        };
+        "core.Page_Session": {
+            count: number;
+            items: null | {
+                client_addr?: string;
+                /** Format: date-time */
+                created_at: string;
+                current: boolean;
+                /** Format: date-time */
+                expires_at: string;
+                /** Format: date-time */
+                last_seen: string;
+                origin: string;
+                public_id: string;
+                user_agent?: string;
+            }[];
+            limit: number;
+            offset: number;
+            total: number;
+        };
+        "core.Page_User": {
+            count: number;
+            items: null | {
+                /** Format: date-time */
+                created_at: string;
+                display_name?: string;
+                email?: string;
+                email_verified: boolean;
+                has_password: boolean;
+                id: string;
+                /** Format: date-time */
+                merged_at?: string;
+                merged_into_user_id?: string;
+                password_reset_required: boolean;
+                roles: null | string[];
+                sign_in_restricted: boolean;
+                status: string;
+                /** Format: date-time */
+                updated_at: string;
+                username: string;
+            }[];
+            limit: number;
+            offset: number;
+            total: number;
+        };
+        "core.PasswordChange": {
+            current: string;
+            new: string;
+        };
         "core.Problem": {
             code: string;
             detail?: string;
@@ -26,6 +1238,152 @@ export type components = {
             title: string;
             type: string;
         };
+        "core.ProfilePatch": {
+            display_name?: null | string;
+            email?: null | string;
+        };
+        "core.Providers": {
+            providers: null | {
+                id: string;
+                kind: string;
+            }[];
+        };
+        "core.RbacRole": {
+            /** Format: date-time */
+            created_at: string;
+            description: string;
+            locked: boolean;
+            name: string;
+            origin: string;
+            pending_seed: null | string[];
+            permissions: null | string[];
+            title: string;
+            /** Format: date-time */
+            updated_at: string;
+            version: number;
+        };
+        "core.RbacRoleCreate": {
+            description: string;
+            name: string;
+            permissions: null | string[];
+            title: string;
+        };
+        "core.RbacRolePatch": {
+            description?: null | string;
+            permissions?: null | string[];
+            title?: null | string;
+        };
+        "core.ResetRequest": {
+            confirm: string;
+            delete_library_files?: boolean;
+            kind: string;
+            library_file_count?: number;
+            library_root?: string;
+        };
+        "core.RolesReplace": {
+            roles: null | string[];
+        };
+        "core.SessionOpened": {
+            /** Format: date-time */
+            expires_at: string;
+            public_id: string;
+            user?: null | {
+                /** Format: date-time */
+                created_at: string;
+                display_name?: string;
+                email?: string;
+                email_verified: boolean;
+                has_password: boolean;
+                id: string;
+                /** Format: date-time */
+                merged_at?: string;
+                merged_into_user_id?: string;
+                password_reset_required: boolean;
+                roles: null | string[];
+                sign_in_restricted: boolean;
+                status: string;
+                /** Format: date-time */
+                updated_at: string;
+                username: string;
+            };
+        };
+        "core.SettingsRequest": {
+            set?: {
+                [key: string]: unknown;
+            };
+            unset?: null | string[];
+        };
+        "core.SettingsResponse": {
+            applied: null | string[];
+            generation: number;
+            post_commit_error?: null | {
+                message: string;
+                section: string;
+            }[];
+            restart_pending?: null | string[];
+        };
+        "core.SettingsView": {
+            [key: string]: {
+                effective?: unknown;
+                fail_closed?: boolean;
+                locked_by?: string;
+                path: string;
+                pending?: boolean;
+                protection: string;
+                quarantined?: boolean;
+                reload: string;
+                schema: unknown;
+                secret?: null | {
+                    set: boolean;
+                    source?: string;
+                    unavailable?: boolean;
+                    /** Format: date-time */
+                    updated_at?: string;
+                    updated_by?: string;
+                };
+                section: string;
+                source: string;
+            };
+        };
+        "core.SetupRequest": {
+            bootstrap_token?: string;
+            email?: string;
+            password: string;
+            username: string;
+        };
+        "core.Status": {
+            auth_disabled: boolean;
+            has_users: boolean;
+            setup_required: boolean;
+        };
+        "core.TempLoginConsume": {
+            new_password?: string;
+            token: string;
+        };
+        "core.UIDiagnostic": {
+            kind: string;
+            module?: string;
+        };
+        "core.User": {
+            /** Format: date-time */
+            created_at: string;
+            display_name?: string;
+            email?: string;
+            email_verified: boolean;
+            has_password: boolean;
+            id: string;
+            /** Format: date-time */
+            merged_at?: string;
+            merged_into_user_id?: string;
+            password_reset_required: boolean;
+            roles: null | string[];
+            sign_in_restricted: boolean;
+            status: string;
+            /** Format: date-time */
+            updated_at: string;
+            username: string;
+        };
+        "core.Value": unknown;
     };
     responses: never;
     parameters: never;
@@ -34,4 +1392,1785 @@ export type components = {
     pathItems: never;
 };
 export type $defs = Record<string, never>;
-export type operations = Record<string, never>;
+export interface operations {
+    core_listAllAPIKeys: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.Page_APIKey"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_getAPIKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.APIKey"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_revokeAPIKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_setAPIKeyStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["core.KeyStatus"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.APIKey"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_listAudit: {
+        parameters: {
+            query?: {
+                action?: string;
+                actor?: string;
+                cursor?: string;
+                limit?: number;
+                outcome?: string;
+                since?: string;
+                target?: string;
+                until?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.CursorPage_AuditRecord"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_exportAudit: {
+        parameters: {
+            query?: {
+                action?: string;
+                actor?: string;
+                outcome?: string;
+                since?: string;
+                target?: string;
+                until?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_redeemBootstrapToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["core.BootstrapRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.BootstrapResult"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_acceptInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["core.InviteAccept"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.SessionOpened"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_lookupInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["core.InviteLookup"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.InvitePreview"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["core.LoginRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.SessionOpened"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_completeOIDC: {
+        parameters: {
+            query?: {
+                code?: string;
+                error?: string;
+                state?: string;
+            };
+            header?: never;
+            path: {
+                provider: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_startOIDC: {
+        parameters: {
+            query?: {
+                callback?: string;
+                code_challenge?: string;
+                code_challenge_method?: string;
+                redirect_uri?: string;
+                return?: string;
+                state?: string;
+            };
+            header?: never;
+            path: {
+                provider: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_listAuthProviders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.Providers"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_setupFirstAdmin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["core.SetupRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.User"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_getAuthStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.Status"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_consumeTempLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["core.TempLoginConsume"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.SessionOpened"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_getMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.Me"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_updateMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["core.ProfilePatch"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.User"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_listMyAPIKeys: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.Page_APIKey"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_createMyAPIKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["core.KeyCreate"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.KeyCreated"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_revokeMyAPIKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_setMyAPIKeyStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["core.KeyStatus"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.APIKey"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_changeMyPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["core.PasswordChange"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_listMySessions: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.Page_Session"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_revokeMySession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                publicID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_listModules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.ModulesResponse"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_getOpenAPIDocument: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                file: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_listRoles: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.Page_RbacRole"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_createRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["core.RbacRoleCreate"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.RbacRole"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_getRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.RbacRole"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_deleteRole: {
+        parameters: {
+            query?: never;
+            header?: {
+                "If-Match"?: string;
+            };
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_updateRole: {
+        parameters: {
+            query?: never;
+            header?: {
+                "If-Match"?: string;
+            };
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["core.RbacRolePatch"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.RbacRole"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_acceptRoleSeed: {
+        parameters: {
+            query?: never;
+            header?: {
+                "If-Match"?: string;
+            };
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.RbacRole"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_getSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.SettingsView"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_updateSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["core.SettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.SettingsResponse"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_getSettingsSchema: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.Value"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_factoryReset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["core.ResetRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.FactoryResetResponse"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_reportCSPViolation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_reportUIDiagnostic: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["core.UIDiagnostic"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_listUsers: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+                role?: string;
+                status?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.Page_User"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_getUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.User"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_deleteUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_listUserAPIKeys: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.Page_APIKey"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_createUserAPIKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["core.KeyCreate"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.KeyCreated"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_disableUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.User"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_enableUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.User"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_resetUserPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.LinkCreated"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_acknowledgeAdminReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_setUserRoles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["core.RolesReplace"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.User"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_listUserSessions: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.Page_Session"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_revokeUserSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                publicID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_mintTempLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.LinkCreated"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_listInvites: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.Page_Invite"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_createInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["core.InviteCreate"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.InviteCreated"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_deleteInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+}

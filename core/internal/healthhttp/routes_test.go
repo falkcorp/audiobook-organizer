@@ -347,15 +347,13 @@ func TestHealthRoutesPermissions(t *testing.T) {
 				t.Run("auth disabled", func(t *testing.T) {
 					p := hhAs(hhBruce, auth.MethodAuthDisabled, c.perm)
 					rep := setup().do(p, c.method, c.target, c.ctype, c.body)
-					if c.interactive {
-						// The guard refuses it first, as the router does.
-						if rep.status != 403 || problemCode(t, rep) != "interactive_required" {
-							t.Errorf("= %d %s, want 403 interactive_required", rep.status, rep.body)
-						}
-						return
-					}
-					if rep.status != 401 {
-						t.Errorf("status = %d, want 401 (a route that names an actor needs a user)", rep.status)
+					// A guarded route's guard refuses it first, as the router
+					// does; an unguarded one meets authorise's rule that a
+					// route naming an actor needs a user. Both are the same
+					// 403 interactive_required, never the session-ending 401
+					// (F4-08 ruling G5(a)).
+					if rep.status != 403 || problemCode(t, rep) != "interactive_required" {
+						t.Errorf("= %d %s, want 403 interactive_required (a route that names an actor needs a user)", rep.status, rep.body)
 					}
 				})
 			}

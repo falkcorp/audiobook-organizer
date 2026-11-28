@@ -80,6 +80,7 @@ var wantRoutes = []struct {
 	{http.MethodPatch, "/api/core/v1/roles/{name}", "updateRole", "core:roles.manage", true},
 	{http.MethodDelete, "/api/core/v1/roles/{name}", "deleteRole", "core:roles.manage", true},
 	{http.MethodPost, "/api/core/v1/roles/{name}/accept-seed", "acceptRoleSeed", "core:roles.manage", true},
+	{http.MethodPost, "/api/core/v1/users/{id}/review-admin", "acknowledgeAdminReview", "core:admin", true},
 }
 
 func registered(t testing.TB) *httpapi.Router {

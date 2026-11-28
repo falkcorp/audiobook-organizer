@@ -58,6 +58,12 @@ type RoleService interface {
 	AcceptSeed(ctx context.Context, actor rbac.Checker, id rbac.RoleName, ifVersion int64) (*rbac.Role, error)
 }
 
+// AdminReviewer is what the acknowledge route calls on *rbac.AdminReview: one
+// method, so the six role methods above stay what 05-rbac 3.4 names.
+type AdminReviewer interface {
+	AcknowledgeAdminReview(ctx context.Context, actor rbac.Checker, userID string) error
+}
+
 // Emitter is the one method of audit.Logger the routes use: the denial a route
 // itself writes (05-rbac §8: a 403 dominance_required is audited where it is
 // written). audit.Logger satisfies it.
@@ -65,7 +71,8 @@ type Emitter interface {
 	Emit(ctx context.Context, e audit.Event)
 }
 
-// Deps is what Register needs. Roles serves every route (nil makes each
+// Deps is what Register needs. Roles serves every route but one (nil makes
+// each answer 503); Review serves the acknowledge route alone (nil makes it
 // answer 503). Audit receives the denials a route records itself (nil
 // records nothing). Log receives skipped-row warnings (nil discards).
 //
@@ -73,17 +80,19 @@ type Emitter interface {
 // its own scope_escalation denial; the route records neither, so no refusal is
 // written twice.
 type Deps struct {
-	Roles RoleService
-	Audit Emitter
-	Log   *slog.Logger
+	Roles  RoleService
+	Review AdminReviewer
+	Audit  Emitter
+	Log    *slog.Logger
 }
 
 // api is what the handlers share. Its fields are fixed at Register.
 type api struct {
-	roles RoleService
-	audit Emitter
-	log   *slog.Logger
-	base  string // the group's base path, for Location and the audit route
+	roles  RoleService
+	review AdminReviewer
+	audit  Emitter
+	log    *slog.Logger
+	base   string // the group's base path, for Location and the audit route
 }
 
 // Register registers the roles routes on g, which must be the router's
@@ -96,7 +105,7 @@ type api struct {
 // anyway (Sensitive), and the guard states the rule where the route is
 // declared. No route carries Guards.Owner: the spec does not ask for it.
 func Register(g *httpapi.Group, deps Deps) {
-	a := &api{roles: deps.Roles, audit: deps.Audit, log: deps.Log, base: g.Base()}
+	a := &api{roles: deps.Roles, review: deps.Review, audit: deps.Audit, log: deps.Log, base: g.Base()}
 	if a.log == nil {
 		a.log = slog.New(slog.DiscardHandler)
 	}
@@ -135,6 +144,11 @@ func Register(g *httpapi.Group, deps Deps) {
 		Summary: "Make a seed role's pending release additions effective",
 		Doc:     "The one write a seed role allows (05-rbac §4.8). Needs If-Match: the role's version. The caller must hold every permission of the resulting set (403 scope_escalation). A role with nothing pending is 409 no_pending_seed.",
 	}, a.acceptSeed)
+	httpapi.Handle(g, httpapi.Route{
+		Method: http.MethodPost, Path: "/users/{id}/review-admin", Name: "acknowledgeAdminReview", Perm: rbac.Need(rbac.CoreAdmin), Tags: tags, Guards: write,
+		Success: http.StatusNoContent, Summary: "Acknowledge one core:admin holder a restore listed for review",
+		Doc: "After a restore with no pre-swap store every core:admin holder is listed for review, and health reports restore_admins_review until an interactive core:admin session has acknowledged each one (05-rbac 7.1); this route acknowledges the holder in the path and audits core.role.review_admin. The holder is looked up in the restore report, not among the users: an account that is not listed (never listed, already acknowledged, or deleted and acknowledged since) is 404 not_found, so acknowledging twice answers 404 the second time and records nothing. Acknowledging yourself is allowed.",
+	}, a.acknowledgeReview)
 }
 
 // ---- handlers -------------------------------------------------------------
@@ -278,6 +292,27 @@ func (a *api) acceptSeed(ctx context.Context, in *httpapi.In[versionReq]) (RbacR
 		return RbacRole{}, a.fail(ctx, in.Principal, http.MethodPost, "/roles/{name}/accept-seed", permManage, id, err, "")
 	}
 	return view(r), nil
+}
+
+func (a *api) acknowledgeReview(ctx context.Context, in *httpapi.In[userReq]) (httpapi.NoContent, error) {
+	if err := a.gate(in.Principal, rbac.CoreAdmin, true, a.review != nil, reviewNeedsInteractive); err != nil {
+		return httpapi.NoContent{}, err
+	}
+	if len(in.Req.ID) > maxIDLen {
+		return httpapi.NoContent{}, mapError(rbac.ErrNotInAdminReview, "")
+	}
+	err := a.review.AcknowledgeAdminReview(ctx, in.Principal.Perms, in.Req.ID)
+	switch {
+	case err == nil:
+		return httpapi.NoContent{}, nil
+	case errors.Is(err, rbac.ErrNotInAdminReview), errors.Is(err, rbac.ErrDenied):
+		return httpapi.NoContent{}, mapError(err, "")
+	}
+	// A report that cannot be read, or an audit record or commit that failed,
+	// is not an unlisted account: only the sentinel is a 404. The cause stays in
+	// the log; the answer is the generic 500 httpapi gives an unmapped error.
+	a.log.ErrorContext(ctx, "rbachttp: acknowledging an admin review failed", "error", err)
+	return httpapi.NoContent{}, err
 }
 
 // ---- helpers --------------------------------------------------------------

@@ -45,9 +45,9 @@ func TestChildModeHelperProcess(t *testing.T) {
 	default:
 		t.Fatalf("unknown helper mode %q", mode)
 	}
-	newServer = func(database.Store, ...server.ServerOption) *server.Server {
+	newServer = func(database.Store, ...server.ServerOption) (*server.Server, error) {
 		os.Exit(reachedServerExitCode)
-		return nil
+		return nil, nil
 	}
 
 	RunOperationRunner()

@@ -38,6 +38,8 @@ For the R2 cutover (the one-way move to the core platform), follow [r2-cutover-r
 
 For debug builds (verbose logging): use `make deploy-debug` instead of `make deploy`.
 
+API keys minted before the flip keep working after it (M3 imports them); a NEW bootstrap after the flip uses `POST /api/core/v1/auth/bootstrap` (see `.claude/skills/server-bootstrap/SKILL.md`).
+
 ### Systemd service
 
 The service is managed as `audiobook-organizer.service`. Server-specific environment variables are in `deploy/local.conf` (gitignored); deploy renders its `Environment=` lines into the systemd drop-in `/etc/systemd/system/audiobook-organizer.service.d/local.conf`. The `ExecStart` override and other host settings are in `host.conf` beside it, which the owner installs as root and deploy never writes ([deploy-and-gpu-ops.md](deploy-and-gpu-ops.md)).
@@ -260,7 +262,7 @@ These CI issues are pre-existing and not caused by your changes:
 
 - API keys are prefixed `abk_`
 - Obtain via browser login → Settings → API Keys, or via `POST /api/v1/auth/api-keys`
-- Bootstrap key (first-run): `POST /api/v1/auth/bootstrap` → `response.data.api_key`
+- Bootstrap key (first-run): `POST /api/core/v1/auth/bootstrap` → `response.key` (core's route; the books route `POST /api/v1/auth/bootstrap` answers 401 since the identity flip; see `.claude/skills/server-bootstrap/SKILL.md`)
 - Never commit API keys to source control
 - Credentials for CI are stored in the repository secrets, not in `.env` files
 

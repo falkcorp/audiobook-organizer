@@ -1045,7 +1045,7 @@ func landsIn(p string, keep []keepOutDir) (string, bool, error) {
 	}
 }
 
-// extractArchive opens archivePath and extracts it into targetPath, every
+// extractArchiveRecording opens archivePath and extracts it into targetPath, every
 // entry confined to it (library.Join, then checkWithin). ExtractStore runs
 // it into a new, private directory once its scan (scanArchive) passed; the
 // round-trip tests run it directly. It can fail after writing some files.
@@ -1065,7 +1065,11 @@ func landsIn(p string, keep []keepOutDir) (string, bool, error) {
 // destination: each entry is written to a new file and renamed into place
 // (writeEntry), so a hard link there leaves the file it names as it was
 // (SF1).
-func extractArchive(archivePath, targetPath string, snapshotDirs []string) error {
+//
+// It also records each regular
+// file's size and SHA-256 in ledger as the file is written, and the codec the
+// archive was read with (nil: record nothing).
+func extractArchiveRecording(archivePath, targetPath string, snapshotDirs []string, ledger *entryLedger) error {
 	// Open backup file
 	backupFile, err := os.Open(archivePath)
 	if err != nil {
@@ -1086,6 +1090,9 @@ func extractArchive(archivePath, targetPath string, snapshotDirs []string) error
 		return fmt.Errorf("failed to create %s reader: %w", codec.Name(), err)
 	}
 	defer compReader.Close()
+	if ledger != nil {
+		ledger.codec = codec.Name()
+	}
 
 	// Create tar reader
 	tarReader := tar.NewReader(compReader)
@@ -1175,8 +1182,17 @@ func extractArchive(archivePath, targetPath string, snapshotDirs []string) error
 			if err := os.MkdirAll(filepath.Dir(target), 0775); err != nil {
 				return fmt.Errorf("failed to create parent directory for %s: %w", target, err)
 			}
-			if err := writeEntry(target, tarReader, os.FileMode(header.Mode)); err != nil {
+			var src io.Reader = tarReader
+			var counted *ledgerReader
+			if ledger != nil {
+				counted = newLedgerReader(tarReader)
+				src = counted
+			}
+			if err := writeEntry(target, src, os.FileMode(header.Mode)); err != nil {
 				return fmt.Errorf("archive entry %q: %w", header.Name, err)
+			}
+			if counted != nil {
+				ledger.add(entryName, counted.n, counted.sum())
 			}
 			changed.add(filepath.Dir(target))
 		default:

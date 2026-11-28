@@ -14,8 +14,8 @@
 // In release R1 books wraps HEAD's server over the store core opens (R1-23,
 // 05-storage §5S.9.3): Register builds books' store on its LegacyRange, runs
 // HEAD's settings boot over it (boot.go), builds today's *server.Server and
-// mounts its gin engine with Registrar.MountLegacy (LegacyAuthGin,
-// ServesSPA); its repairs hook runs HEAD's open-time writers and closes the
+// mounts its gin engine with Registrar.MountLegacy (LegacyAuthCore since the
+// F4-08 switch, ServesSPA); its repairs hook runs HEAD's open-time writers and closes the
 // store last, and its server hook runs HEAD's start up to the listener and
 // HEAD's post-drain stop; the listener stack itself is HEAD's, handed to the
 // kernel through app.Options.R1Listen until R1-17 builds core's perimeter.
@@ -47,6 +47,12 @@ import (
 
 // bootLog logs books' boot (the settings boot and the store's lifecycle).
 var bootLog = logger.New("books")
+
+// newServer builds the server Register hands the kernel. A variable so a test
+// can make it refuse: with a real store no server refusal is reachable
+// through Register (ValidateABSConfig answers the ABS ones first), and the
+// unwind of a refused server needs a boot that gets there.
+var newServer = server.NewServer
 
 // ID is books' module ID.
 const ID module.ID = "books"
@@ -167,6 +173,13 @@ type booksModule struct {
 	// before the settings boot: a stored settings blob, the seeded roles.
 	beforeSettings func(*database.PebbleStore)
 
+	// idw is the identity boot's late handles, built by Options when the
+	// identity predicate is on and finished by Register; nil otherwise.
+	idw *identityWiring
+	// cutoverErr is why the cutover func could not build M3 (Manifest.Cutover has
+	// no error return), recorded for Register to refuse the boot with.
+	cutoverErr atomic.Pointer[error]
+
 	// store is the store Register built over books' LegacyRange.
 	store atomic.Pointer[database.PebbleStore]
 	// repairsBegan is set when the repairs hook starts; from then the
@@ -198,7 +211,7 @@ type booksModule struct {
 // (server.LegacyPrefixes: every route's subtree, every top segment and
 // "login") follow from the ABS flag Module captured.
 func (m *booksModule) Manifest() module.Manifest {
-	return module.Manifest{
+	mf := module.Manifest{
 		ID:             ID,
 		Version:        moduleVersion,
 		DisplayName:    "Audiobooks",
@@ -225,9 +238,27 @@ func (m *booksModule) Manifest() module.Manifest {
 		// rename table maps (config_wire.go).
 		AppConfig: appConfigSpec(),
 		Rewrite:   m.rewriteStep(),
+		// The legacy-auth bridge re-derives the principal stage 12 bound
+		// (after a password reset or a role change), so books receives
+		// Deps.AuthRefresh on an identity boot; the kernel hands it to no
+		// other module, and none else declares it (TestAuthRefresh_...).
+		AuthRefresh: true,
+		// The Cloudflare Access guest policy and the guest's phone-app key follow
+		// core's account events (account_lifecycle_wire.go): books receives
+		// Deps.AuthLifecycle on an identity boot and registers the one hook from
+		// Register. Declared statically like AuthRefresh; the kernel hands it to
+		// no other module (TestAuthLifecycle_...).
+		AuthLifecycle: true,
 		// No native route yet, so no public one (the gin mount's public
 		// routes are the legacy manifest's Public rows).
 	}
+	if identityOn() {
+		// The scopes the atom table, the seed sets and the ambient list name,
+		// and books' one seed role (identity_declarations.go): declared only
+		// when the flip is, so a boot without it declares nothing to rbac.
+		mf.Permissions, mf.Roles, mf.ImportedRoleIDs = booksPermissions(), booksRoles(), booksImportedRoleIDs()
+	}
+	return mf
 }
 
 // beforeMigration is the observer the manifest passes database.BooksSpec:
@@ -262,6 +293,10 @@ func (m *booksModule) cleanStopVoid() string {
 // errABSFlagDrift is Register's refusal when the stored settings turn the ABS
 // surface the other way from the environment Module read: the manifest's
 // legacy prefixes were fixed from the environment before the store opened.
+// errABSMisconfigured is the boot refusal for an enabled ABS surface whose settings
+// cannot build it (see server.ValidateABSConfig).
+var errABSMisconfigured = errors.New("books: modules.books.abs.api_enabled is on but the Audiobookshelf API is misconfigured")
+
 var errABSFlagDrift = errors.New("books: the stored settings set abs_api_enabled differently from the environment; " +
 	"set " + absEnabledEnv + " in the environment (it is environment-authoritative), so the legacy prefixes fixed before the store opened match the server")
 
@@ -321,6 +356,16 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	legacy := r.Deps().Storage.Legacy
 	if legacy == (storage.LegacyRange{}) {
 		return nil
+	}
+	// The compat method, before anything reads Deps: the kernel binds
+	// Deps.AuthCompat when the module registers its method (Registrar.AuthMethod),
+	// so the identity the server is built under (below) reads the handle from
+	// r.Deps() after this call, never from a copy taken before it.
+	r.AuthMethod(auth.MethodSpec{Method: absAuthMethod})
+	if cerr := m.cutoverErr.Load(); cerr != nil {
+		// The cutover list could not be built (cutover.go): the store was opened
+		// under a manifest whose M3 is missing, so nothing may serve over it.
+		return fmt.Errorf("books: the identity cutover could not be built: %w", *cerr)
 	}
 	// The memdb sort indexes and the counts-cache interval are read once, as
 	// the store opens. cmd's initConfig set them from the operator layers;
@@ -388,6 +433,13 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	if config.AppConfig.ABSAPIEnabled != m.abs {
 		return errABSFlagDrift
 	}
+	// The ABS surface's own settings, checked here before the server is built:
+	// NewServer checks them again and returns the same error, but this reads the
+	// effective config at the one place that names it errABSMisconfigured, and
+	// builds nothing first. Release still tears the store down.
+	if err := server.ValidateABSConfig(config.Snapshot()); err != nil {
+		return fmt.Errorf("%w: %w", errABSMisconfigured, err)
+	}
 	// The shared Google Books daily budget persists its count in this store
 	// for the life of the process: attached BEFORE the server is built, so
 	// no Google call made while it starts counts against an in-memory zero
@@ -400,10 +452,33 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	// dispatched, started, finished) do not each become a system Activity row.
 	// The op's own rows come from the registry's activity mirror. Passing nil
 	// would capture slog.Default(), the process logger the Activity tap feeds.
-	srv := server.NewServer(store, server.WithLogger(r.Deps().Log), server.WithStartExtender(extendStart))
+	deps := r.Deps()
+	srvOpts := []server.ServerOption{server.WithLogger(deps.Log), server.WithStartExtender(extendStart)}
+	identity, err := m.identityFor(deps)
+	if err != nil {
+		return err
+	}
+	if identity != nil {
+		srvOpts = append(srvOpts, server.WithIdentity(identity), server.WithAccessVerifier(m.idw.verifier),
+			// The guest policy's keep rule reads the same key the admission policy
+			// does, with the same semantics (identityPolicyFrom).
+			server.WithAccessAllowList(func() (string, error) { return cfaccessAllowedEmails(deps.Config) }))
+	}
+	// A refusal comes back as an error, and NewServer has released whatever it
+	// had begun to build, so there is no server for Release to tear down: the
+	// error returns to the kernel's caller, and Release closes the store.
+	srv, err := newServer(store, srvOpts...)
+	if err != nil {
+		return fmt.Errorf("books: %w", err)
+	}
 	// Stored before any check can fail, so Release tears it down when New
 	// then refuses.
 	m.srv.Store(srv)
+	if identity != nil {
+		if err := registerAccountLifecycle(deps, srv); err != nil {
+			return err
+		}
+	}
 	// The drift check: the reviewed manifest must describe this engine
 	// exactly, and its routes must lie inside the prefixes Manifest declared
 	// (the router refuses a route outside them at P7).
@@ -416,7 +491,6 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		return fmt.Errorf("books: legacy manifest: %w", err)
 	}
 
-	r.AuthMethod(auth.MethodSpec{Method: absAuthMethod})
 	// The repairs hook is registered first, so it starts before the server
 	// hook and stops after it (the kernel stops hooks in reverse): the
 	// store closes once HEAD's stop has drained, and before the kernel
@@ -437,9 +511,9 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	// Stage 5's values for the mount's responses (R1-17): HEAD's
 	// per-response CSP, its report URL and the embedded bundle's build ID.
 	csp, cspReport, buildID := srv.LegacyPerimeter()
-	r.MountLegacy(httpapi.LegacyMount{
+	mount := httpapi.LegacyMount{
 		Handler:     srv.LegacyHandler(),
-		Auth:        httpapi.LegacyAuthGin,
+		Auth:        httpapi.LegacyAuthCore,
 		ServesSPA:   true,
 		Routes:      slices.Values(routes),
 		Redirects:   srv.LegacyRedirects(),
@@ -451,7 +525,15 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		// Stage 8: the Basic gate that was gin's middleware (F3-07 e4).
 		BasicGate:         server.LegacyBasicGate(),
 		BasicExemptAssets: server.LegacyBasicExemptAssets,
-	})
+	}
+	// The mount's authentication is the literal's, LegacyAuthCore, and nothing
+	// writes it after: reachMountAuth (internal/books/cutover) accepts the
+	// literal and fails closed on any other write to .Auth. identityTies still
+	// refuses a boot whose predicate, server and mount disagree (until B10h).
+	if err := identityTies(identityOn(), identity != nil, mount.Auth); err != nil {
+		return err
+	}
+	r.MountLegacy(mount)
 	cfg := m.serveConfig()
 	r.Hook(module.Hook{
 		Name: string(ID) + ".server",

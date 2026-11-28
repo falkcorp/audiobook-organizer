@@ -5,7 +5,7 @@
 
 # HTTP API
 
-The Audiobook Organizer backend exposes a JSON REST API under `/api/v1/`. All endpoints require authentication except `/api/v1/auth/bootstrap` (first-run setup) and `/api/v1/auth/status`.
+The Audiobook Organizer backend exposes a JSON REST API under `/api/v1/`. All endpoints require authentication except `/api/v1/auth/status` and the first-run bootstrap, which core serves at `POST /api/core/v1/auth/bootstrap` (the books route `/api/v1/auth/bootstrap` answers 401 `{"error":"invalid bootstrap token","code":"UNAUTHORIZED"}` under the identity flip).
 
 ## Authentication
 
@@ -21,7 +21,7 @@ Token types:
 **Never use `X-API-Key` header** — it is not supported.
 
 To obtain an API key:
-1. Bootstrap admin via `POST /api/v1/auth/bootstrap` (first-run only). Response: `{ "data": { "api_key": "abk_…" } }`
+1. Bootstrap admin via `POST /api/core/v1/auth/bootstrap` (first-run only, one-time token from the `.bootstrap-token` file). Response: `{ "key": "…", … }` with no `data` envelope; see `.claude/skills/server-bootstrap/references/bootstrap-api.md`.
 2. Or: log in via browser, then `POST /api/v1/auth/api-keys` to create a persistent key.
 
 ## Endpoint Reference
@@ -380,7 +380,7 @@ answers are gone: they existed only to protect owner evaluation.
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/auth/bootstrap` | First-run admin setup |
+| `POST` | `/api/core/v1/auth/bootstrap` | First-run admin setup (core; the books route `/api/v1/auth/bootstrap` answers 401 after the identity flip) |
 | `GET` | `/api/v1/auth/status` | Session status (unauthenticated OK) |
 | `POST` | `/api/v1/auth/login` | Login with username/password |
 | `POST` | `/api/v1/auth/logout` | Invalidate session |

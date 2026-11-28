@@ -1,0 +1,3 @@
+### Added
+
+- Under core identity (`server.WithIdentity`, which nothing sets yet) the user footprint route (`GET /users/:id/footprint`) and `usermerge.Service.Footprint` answered 409 `merge_unavailable_under_identity` before any account is resolved or any store read, like the merge preview, apply and resume, because the footprint read books' own copy of an account's sign-ins and credentials, which hold nothing once the store is core's. (Superseded by the F4-08 B10fp fragment: with core's handles wired the footprint now answers from core; only a flipped server without them still answers 409.) The merge listing stays readable: it is accurate pre-flip history. A server without the option behaves exactly as before.

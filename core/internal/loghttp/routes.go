@@ -87,7 +87,7 @@ func Register(g *httpapi.Group, d Deps) error {
 		Summary: "Query the system log journal, newest first",
 		Doc: "Filters: level (debug, info, warn or error: that level and above; default debug), module, since and until (RFC 3339; since is inclusive, until exclusive; since after until is 422), q (a case-insensitive substring of the message). cursor is the next_cursor of a previous page; a cursor the journal did not issue is 400 invalid_cursor. limit defaults to 50 and is clamped to 1 to 1000. " +
 			"A caller without core:users.view is not served a record a module flags as naming another user's data, and sees user_id blank on the records it is served. " +
-			"With authentication disabled the route answers 401.",
+			"With authentication disabled the route answers 403 interactive_required.",
 	}, a.list)
 	return nil
 }

@@ -82,7 +82,7 @@ func (fx *fixture) router(user *database.User) *gin.Engine {
 		}
 		c.Next()
 	})
-	fx.handler.Register(r.Group("/api/v1"), servermiddleware.RequireAdmin())
+	fx.handler.Register(r.Group("/api/v1"), servermiddleware.RequireAdmin(), servermiddleware.RequireAdmin())
 	return r
 }
 
@@ -328,7 +328,7 @@ func TestRoutes_RequireAdmin(t *testing.T) {
 func TestRegister_ReadGateOpensReadsOnly(t *testing.T) {
 	fx := newFixture(t)
 	r := gin.New()
-	routes := fx.handler.Register(r.Group("/api/v1"), func(c *gin.Context) { c.Next() })
+	routes := fx.handler.Register(r.Group("/api/v1"), func(c *gin.Context) { c.Next() }, servermiddleware.RequireAdmin())
 
 	for _, rt := range []struct{ method, url string }{
 		{http.MethodGet, "/api/v1/admin/debug/books/" + fx.book.ID},

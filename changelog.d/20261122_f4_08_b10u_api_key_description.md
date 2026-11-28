@@ -1,0 +1,7 @@
+### Added
+
+- Core identity API keys carry an optional description again, the text an owner tells one key from another by (`auth.APIKey.Description`, `auth.KeySpec.Description`; `description` on the key body, the create body and every key list). One rule, `auth.CheckKeyDescription`, applies to every write: valid text with no control character (a line break or a tab is one) and at most 1024 characters. HEAD set no limit, so 1024 is core's, the same bound as a role description. `CreateAPIKey`, the import rule `CheckImportAPIKey` and the create route (422 on `/body/description`) refuse a description that breaks it; nothing is ever cut or cleaned on a write. The stored record leaves the field out while it is empty, so existing records are unchanged and older records decode as before.
+
+### Fixed
+
+- The HEAD cutover (M3) no longer drops every API key description: it reads HEAD's `description` and carries it to the imported core key. Because HEAD never limited the text, its create form was a multi-line box, and HEAD cannot edit a description afterwards, a description core would refuse does not stop the cutover. M3 tidies it deterministically instead (invalid UTF-8 becomes U+FFFD, each run of CR, LF and tab becomes one space, other control characters are dropped, surrounding spaces are trimmed, the text is cut to 1024 characters) and logs one note per affected key naming the key and what changed, never the text. A clean description is carried byte for byte.

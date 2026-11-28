@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	"github.com/gin-gonic/gin"
 )
 
@@ -499,6 +500,13 @@ func CheckPermission(store UserCounter, c *gin.Context, p auth.Permission) bool 
 // request (a list that leaves out what the caller may not use). The first-run
 // bypass applies: with no users yet, every permission is held.
 func HoldsPermission(store UserCounter, c *gin.Context, p auth.Permission) bool {
+	// Under core identity (legacyauth.WithIdentity, F4-08 B7) the atom's table
+	// entry decides, through the principal stage 12 bound. HEAD's first-run
+	// bypass reads books' own user count, which is not the account record once
+	// core owns identity, so it is not applied.
+	if held, bridged := legacyauth.Held(c.Request.Context(), string(p)); bridged {
+		return held
+	}
 	// First-run bypass — RequireAuth uses the same pattern.
 	if store != nil {
 		if n, err := store.CountUsers(); err == nil && n == 0 {
@@ -509,12 +517,13 @@ func HoldsPermission(store UserCounter, c *gin.Context, p auth.Permission) bool 
 }
 
 // RespondPermissionDenied writes the refusal of a caller that does not hold p:
-// 401 when no user is on the context, 403 naming p when there is one.
+// 401 when no user is on the context (403 for the auth-disabled principal,
+// legacyauth.RespondNoUser), 403 naming p when there is one.
 func RespondPermissionDenied(c *gin.Context, p auth.Permission) {
 	// Distinguish unauth (no user on ctx) from authz fail (user present but
 	// missing perm) so API clients get a meaningful status code.
 	if _, ok := auth.UserFromContext(c.Request.Context()); !ok {
-		httputil.RespondWithUnauthorized(c, "authentication required")
+		legacyauth.RespondNoUser(c, "authentication required")
 	} else {
 		httputil.RespondWithForbidden(c, "permission denied: "+string(p))
 	}
@@ -539,6 +548,12 @@ const adminKeyScopeRefusal = "admin role required: this API key's scopes do not 
 // request records, so a later stage that re-marks the request cannot lift the
 // key's narrowing.
 func APIKeyMayActAsAdmin(c *gin.Context) bool {
+	// Under core identity (legacyauth.WithIdentity, F4-08 B7c) the key is the
+	// principal stage 12 bound, not a record on this context: it may act as an
+	// admin when it holds every atom, which is HEAD's test in core's terms.
+	if may, bridged := legacyauth.KeyMayActAsAdmin(c.Request.Context()); bridged {
+		return may
+	}
 	key, hasKey := CurrentAPIKey(c)
 	if !hasKey {
 		return CurrentAuthMethod(c) != auth.MethodAPIKey
@@ -562,7 +577,7 @@ func RequireAdmin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user, ok := CurrentUser(c)
 		if !ok || user == nil {
-			httputil.RespondWithUnauthorized(c, "authentication required")
+			legacyauth.RespondNoUser(c, "authentication required")
 			c.Abort()
 			return
 		}

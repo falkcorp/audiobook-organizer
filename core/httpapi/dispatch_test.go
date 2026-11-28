@@ -553,7 +553,7 @@ func TestClaim_RefusesUncleanPrefix(t *testing.T) {
 // unknown LegacyAuth is refused (the registrar reports it as
 // ProblemLegacyAuth before the router sees it).
 func TestMountLegacy_RequiresAuth(t *testing.T) {
-	for _, a := range []LegacyAuth{0, LegacyAuthGin + 1} {
+	for _, a := range []LegacyAuth{0, LegacyAuthCore + 1} {
 		r := NewRouter(Options{}, Deps{})
 		if err := r.MountLegacy(LegacyMount{Owner: "batcave", Handler: http.NotFoundHandler(), Auth: a}); !errors.Is(err, ErrLegacyManifest) {
 			t.Errorf("MountLegacy(Auth %d) = %v, want ErrLegacyManifest", a, err)
