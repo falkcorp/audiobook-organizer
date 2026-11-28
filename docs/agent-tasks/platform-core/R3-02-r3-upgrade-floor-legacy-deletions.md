@@ -162,6 +162,7 @@ tests; grep 7's `XPC_SERVICE_NAME` or `RestartPreventExitStatus=78` is absent (t
    `TestCutoverLeavesOtherFamiliesByteIdentical`, `TestRollbackRestoreBootsPreviousBuild`) and the cutover
    scenarios of `TestBootCrashMatrix_ABO`, because they exercise deleted code; keep `internal/books/testdata/r2corpus/`
    (it is the pre-R2 store fixture of the new tests). Delete `TestR0OpensR1Store`.
+   Before M3 (`books.identity-cutover`) leaves the manifest, close todo **M3-RETIREMENT-GUARD** (`todo.d/2026-11-28-m3-retirement-guard.md`): P4d/P5 must refuse, before any write, a store not yet at the identity level.
 5. **opsgen, ops.ts, state, together** (07 §7.8): move `operationPolling` (wherever it lives at your base) and its
    remaining books importers from `ops.ts`'s enums onto the generated `TaskRunView` states (the shell's Activity
    page did the same at F5); drop the `ops.ts` re-export from `services/api`; delete `web/src/generated/ops.ts`,
