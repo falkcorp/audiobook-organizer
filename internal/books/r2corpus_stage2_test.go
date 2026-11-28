@@ -37,7 +37,12 @@ type r2Stage2Manifest struct {
 }
 
 type r2Stage2Case struct {
-	Label       string            `json:"label"`
+	Label string `json:"label"`
+	// KeyPrefix is the family of the case's entity, the row its outcome is
+	// about (a quarantined role:, a run). Its keys may also name other rows the
+	// case touches, the secondary rows and the holders of an entry naming the
+	// entity (a user whose role list names a quarantined role).
+	KeyPrefix   string            `json:"key_prefix"`
 	Keys        []string          `json:"keys"`
 	RemovedKeys []string          `json:"removed_keys"`
 	CorruptKeys []string          `json:"corrupt_keys"`

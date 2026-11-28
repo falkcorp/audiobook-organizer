@@ -66,6 +66,9 @@ run="^($(tr ' ' '|' <<<"$tests"))\$/^(${sub})\$"
 # step or legacy migration runs on that corpus (nothing to checkpoint; the
 # archive half restores it), so only r0's is required.
 want+=("TestRollbackRestoreBootsPreviousBuild/$shard/archive")
+# M3's cells: its stored counts, the role case's holders, the system user remap.
+want+=("TestCutoverOnR0Corpus/$shard/identity-counts" "TestCutoverOnR0Corpus/$shard/role-holders"
+  "TestCutoverPreservesIDsAndReferences/$shard/system-user")
 if [ "$shard" = r0 ]; then
   want+=(TestRollbackRestoreBootsPreviousBuild/r0/checkpoint
     TestCutoverOnR0Corpus/selftest/r0 TestCutoverOnR0Corpus/selftest/prefreeze-written
@@ -74,6 +77,7 @@ if [ "$shard" = r0 ]; then
     TestCutoverOnR0Corpus/selftest/id-resolution
     TestCutoverOnR0Corpus/selftest/residual TestCutoverOnR0Corpus/selftest/completion
     TestCutoverOnR0Corpus/selftest/surviving-cases
+    TestCutoverOnR0Corpus/selftest/holders TestCutoverOnR0Corpus/selftest/identity-ids
     TestPrefreezeTagResolver TestPrefreezeFetchVerifiesChecksum)
   python3 scripts/ci/gen_shared_family_lists.py --check
 fi
