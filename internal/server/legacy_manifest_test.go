@@ -342,6 +342,7 @@ func mountBooksWith(t *testing.T, srv *Server, deps httpapi.Deps) (*httpapi.Rout
 	manifest, err := srv.LegacyManifest()
 	require.NoError(t, err)
 	r := httpapi.NewRouter(httpapi.Options{}, deps)
+	wireSignedIn(t, r)
 	r.CoreGroup()
 	for _, c := range LegacyPrefixes(config.AppConfig.ABSAPIEnabled) {
 		require.NoError(t, r.Claim("books", c))

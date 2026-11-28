@@ -37,6 +37,7 @@ import (
 func stagesOver(t *testing.T, engine http.Handler, d httpapi.Deps, routes ...httpapi.LegacyRoute) (*httpapi.Router, http.Handler) {
 	t.Helper()
 	r := httpapi.NewRouter(httpapi.Options{}, d)
+	wireSignedIn(t, r)
 	claimed := map[string]bool{}
 	var tops []string
 	for i, lr := range routes {
