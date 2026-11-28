@@ -119,8 +119,23 @@ func convert(q query.Query) (res index.Query, matchAll bool, err error) {
 	case *query.BooleanQuery:
 		return convertBoolean(v)
 	}
+	if isBareStar(q) {
+		return nil, true, nil
+	}
 	q2, err := convertLeaf(q)
 	return q2, false, err
+}
+
+// isBareStar reports HEAD's translation of an unfielded `*`: a prefix query with
+// no prefix, which HEAD runs against its "_all" field and which every indexed
+// book answers. It is a match-all, not an Or over the fields' empty prefixes: the
+// per-field fan-out (see convertLeafUnweighted) would ask each field for the
+// terms it has and so leave out a book with none of them, where HEAD's "_all"
+// lists every book. A `title:*` is a fielded empty prefix and stays one: it
+// matches the books that have a title term, as in HEAD.
+func isBareStar(q query.Query) bool {
+	p, ok := q.(*query.PrefixQuery)
+	return ok && p.Prefix == "" && p.Field() == ""
 }
 
 func convertAll(qs []query.Query) (kids []index.Query, anyAll bool, err error) {
@@ -258,8 +273,12 @@ func convertLeaf(q query.Query) (index.Query, error) {
 // analyses its _all with its default analyzer (book_en_nostop), while the
 // engine's composite is analysed with the standard analyzer, so the engine's _all
 // does not match "lucius fox" where the stemmed terms are "luciu fox" (HEAD does;
-// pinned by TestUnfieldedPhraseAnswersLikeHead). Each field's own analyzer is the
+// pinned by TestUnfieldedPatternsAnswerLikeHead). Each field's own analyzer is the
 // one HEAD's composite was built from.
+//
+// This fan-out goes away once core builds its _all mapping with the index's default
+// analyzer (a core-side follow-up, named in seams.d/F7-09-T6-core.md row 7): the
+// unfielded leaves can then be index.MatchAnyField again.
 func convertLeafUnweighted(q query.Query, field string) (index.Query, error) {
 	each := func(f func(field string) index.Query) index.Query {
 		if field != "" {

@@ -510,3 +510,56 @@ func TestDispose(t *testing.T) {
 		t.Error("no narrow message")
 	}
 }
+
+// bareStar is a corpus with a book that has no text at all, which is the one a
+// per-field fan-out of empty prefixes could leave out.
+func bareStar() *searchindextest.FakeSource {
+	return &searchindextest.FakeSource{
+		Authors: map[int]*database.Author{1: {ID: 1, Name: "Lucius Fox"}},
+		Books: []database.Book{
+			{ID: "g", Title: "Gotham Knights", AuthorID: new(1)},
+			{ID: "k", Title: "Knightfall"},
+			{ID: "blank"},
+		},
+	}
+}
+
+// TestBareStarIsMatchAll: an unfielded `*` is HEAD's empty prefix on "_all",
+// which lists every book. It translates to match-all, not to an Or over the
+// fields' empty prefixes, and answers as HEAD does alone and under AND and OR.
+func TestBareStarIsMatchAll(t *testing.T) {
+	tr, err := searchindex.Translate("*", now)
+	if err != nil || !tr.MatchAll || tr.Query != nil {
+		t.Fatalf("`*` = %+v, %v; want MatchAll and no query", tr, err)
+	}
+	src := bareStar()
+	e := searchindextest.OpenEngine(t, src, searchindex.Options{})
+	e.Rebuild(t)
+	for _, text := range []string{"*", "* knight*", "* OR gotham", "gotham OR *"} {
+		want := headRanking(t, src, text)
+		slices.Sort(want)
+		if got := ids(t, e.Index, text); !slices.Equal(got, want) {
+			t.Errorf("%s = %v, HEAD answers %v", text, got, want)
+		}
+	}
+	if got := ids(t, e.Index, "*"); len(got) != 3 {
+		t.Errorf("`*` = %v, want all 3 books, the blank one included", got)
+	}
+}
+
+// TestFieldedEmptyPrefixStaysAPrefix: `title:*` is a prefix on one field and is
+// left as HEAD builds it; only the unfielded `*` is a match-all.
+func TestFieldedEmptyPrefixStaysAPrefix(t *testing.T) {
+	n := node(t, "title:*")
+	if n.Op != index.OpPrefix || n.Field != "title" || n.Text != "" {
+		t.Errorf("title:* = %+v, want Prefix(title, \"\")", n)
+	}
+	src := bareStar()
+	e := searchindextest.OpenEngine(t, src, searchindex.Options{})
+	e.Rebuild(t)
+	want := headRanking(t, src, "title:*")
+	slices.Sort(want)
+	if got := ids(t, e.Index, "title:*"); !slices.Equal(got, want) {
+		t.Errorf("title:* = %v, HEAD answers %v", got, want)
+	}
+}
