@@ -46,6 +46,8 @@ const (
 	OutcomeItemSuperseded = "item-outcome-superseded"
 )
 
+// (OutcomeAuthMethodUnmapped is declared beside the mapping, actor.go.)
+
 // Config is what the step needs besides its declaration.
 type Config struct {
 	// Importer is the native task store's importer (module.Importers' tasks
@@ -346,6 +348,7 @@ func (m *Migration) stepRun(ctx context.Context, kv storage.KV, w *datamigrate.S
 		}
 		m.logger.Info("m4: item outcomes carried as superseded", "run", id, "count", c.superseded)
 	}
+	noteUnmappedMethods(w, m.logger, id, c.unmapped)
 	for _, row := range rr.all() {
 		if strings.HasPrefix(string(row.Key), prefixOpState1) && strings.HasSuffix(string(row.Key), ":params") {
 			// The chunk journal of a running backfill is live state (HEAD's

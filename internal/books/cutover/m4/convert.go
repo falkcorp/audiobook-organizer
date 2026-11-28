@@ -128,6 +128,9 @@ type converted struct {
 	// superseded is how many item outcomes were carried as checkpoints because
 	// another outcome of the same item won the item page (see items).
 	superseded int
+	// unmapped is the auth method of each imported actor (the run's and its
+	// trail's) that NormalizeAuthMethod does not list, kept verbatim.
+	unmapped []string
 }
 
 // convert builds the importer's record and data for a run, or the reason the
@@ -183,7 +186,10 @@ func convert(rr *runRows) (*converted, string) {
 		rec.Mode = rt.Mode // rule 2: a plan is Preview, an apply is Live, whatever the record said
 	}
 	rec.Trigger = trigger(row.Trigger)
-	rec.Actor = tasks.Actor{UserID: row.Actor.UserID, AuthMethod: row.Actor.AuthMethod}
+	var listed bool
+	if rec.Actor, listed = importActor(row.Actor); !listed {
+		out.unmapped = append(out.unmapped, row.Actor.AuthMethod)
+	}
 	if row.Actor.AuthMethod == "system" && row.Actor.UserID == "" {
 		rec.Actor.System = "books"
 	}
@@ -298,7 +304,11 @@ func (c *converted) pages(rr *runRows) string {
 		}
 		ev := tasks.RunEvent{From: eventState(t.From), To: eventState(t.To), Event: t.Event, Reason: t.Reason, Attempt: t.Attempt, FenceEpoch: t.FenceEpoch, At: t.At.UTC()}
 		if t.Actor != nil {
-			ev.Actor = &tasks.Actor{UserID: t.Actor.UserID, AuthMethod: t.Actor.AuthMethod}
+			a, listed := importActor(*t.Actor)
+			ev.Actor = &a
+			if !listed {
+				c.unmapped = append(c.unmapped, t.Actor.AuthMethod)
+			}
 		}
 		c.data.Pages = append(c.data.Pages, tasks.PageEntry{Page: tasks.PageEvents, Seq: t.Seq, Event: ev})
 	}

@@ -757,8 +757,10 @@ type runSpec struct {
 	// actor HEAD's system actor (no user, auth method "system").
 	result, errText string
 	system          bool
-	// mutateRec edits the v3 record before it is written.
+	// mutateRec edits the v3 record before it is written; evtActor is the actor
+	// every trail entry carries (none when nil).
 	mutateRec func(*store.RunRecord)
+	evtActor  *store.Actor
 }
 
 func runID(i int) string { return fmt.Sprintf("01HBAT%020d", i) }
@@ -828,7 +830,7 @@ func seedRun(ctx context.Context, t testing.TB, lr storage.LegacyRange, s runSpe
 	}{rec.Progress, new(s.queued.Add(time.Minute))})
 	for i := 1; i <= s.evts; i++ {
 		at := s.queued.Add(time.Duration(i) * time.Second)
-		put(fmt.Sprintf("opv3:evt:%s:%020d:%06d", s.id, at.UnixNano(), i), store.Transition{Seq: uint64(i), From: state.V3Queued, To: state.V3Running, Event: "claim", Attempt: 1, FenceEpoch: 2, At: at})
+		put(fmt.Sprintf("opv3:evt:%s:%020d:%06d", s.id, at.UnixNano(), i), store.Transition{Seq: uint64(i), From: state.V3Queued, To: state.V3Running, Event: "claim", Attempt: 1, FenceEpoch: 2, Actor: s.evtActor, At: at})
 	}
 	for i := 1; i <= s.intents; i++ {
 		put(fmt.Sprintf("opv3:intent:%s:%010d", s.id, i), store.Intent{Seq: uint64(i), Subject: "book:hush-" + fmt.Sprint(i), Kind: "modify", Planned: json.RawMessage(`{"title":"Hush"}`), WrittenAt: s.queued})
