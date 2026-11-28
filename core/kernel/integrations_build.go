@@ -96,6 +96,7 @@ func buildIntegrations(ctx context.Context, in integrationsInputs) (*integration
 			err = fmt.Errorf("kernel: integrations: %s: %w", st.name, err)
 			return nil, errors.Join(err, s.close(ctx))
 		}
+		s.log.Debug("integrations: step done", slog.String("part", st.name))
 	}
 	return s, nil
 }

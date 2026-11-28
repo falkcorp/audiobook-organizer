@@ -296,7 +296,12 @@ func integPassword(v string) map[string]secrets.Value {
 func TestBuildIntegrations_OrderAndClose(t *testing.T) {
 	r, in := newIntegRig(t, nil)
 	s := r.build(in)
-	// Pool and notify have nothing to stop, so only four parts are closed.
+	// All six steps run in the fixed order; the Pool and notify have nothing
+	// to stop, so only four parts are closed.
+	wantSteps := []string{"providerhttp", "integrations", "ai", "library", "downloads", "notify"}
+	if got := r.logs.parts("step done"); !slices.Equal(got, wantSteps) {
+		t.Fatalf("steps %v, want %v", got, wantSteps)
+	}
 	if got, want := r.logs.parts("part built"), []string{"providerhttp", "integrations", "ai", "library"}; !slices.Equal(got, want) {
 		t.Fatalf("built %v, want %v", got, want)
 	}
