@@ -24,12 +24,16 @@ import (
 // answers "nobody has state", so the book is deleted with the progress on it.
 //
 // So, under core identity, the two list methods answer from core's directory
-// (UserDirectory, installed by books' Register over core's Identities). There
-// is no fallback to the drained family. A store marked as under core identity
-// (RequireUserDirectory) with no directory installed answers
-// ErrNoUserDirectory, and a directory error is returned as it is: an error is
-// never an empty list, because every gate above treats an error as "do not
-// delete" and an empty list as "delete".
+// (UserDirectory, installed by books' Register over core's Identities, or by an
+// offline caller over core's offline account read). There is no fallback to
+// the drained family. A store is under core identity when the claim set it was
+// opened with retires the u: family (the identity flip's spec), and the store's
+// one constructor (newCoreStore) marks it then (RequireUserDirectory), so every
+// holder of the store, served or offline, a migration step's included, is
+// marked from the moment it exists. A marked store with no directory installed
+// answers ErrNoUserDirectory, and a directory error is returned as it is: an
+// error is never an empty list, because every gate above treats an error as
+// "do not delete" and an empty list as "delete".
 //
 // The point reads (GetUserByID, GetUserByUsername, GetUserByVerifiedEmail) and
 // CountUsers are deliberately NOT redirected. They guard access, and each of
@@ -41,6 +45,9 @@ import (
 // HEAD's ListUsers listed every u: row. An error must be returned as an error,
 // never as an empty or partial list.
 type UserDirectory func() ([]User, error)
+
+// userKeyPrefix is the u: family: HEAD's user rows, which M3 drains.
+const userKeyPrefix = "u:"
 
 // ErrNoUserDirectory is ListUsers' answer on a store under core identity whose
 // directory has not been installed.
@@ -56,10 +63,14 @@ type userDirectorySeam struct {
 
 // RequireUserDirectory marks the store as running under core identity: from now
 // on ListUsers and ListUsersStrict answer from the installed directory, or
-// ErrNoUserDirectory while none is. books' Register calls it as soon as the
-// store is open, before anything else can read through it, so no caller ever
-// reads the drained u: family as "no users". It cannot be undone.
+// ErrNoUserDirectory while none is. newCoreStore calls it, before the store is
+// returned, for a store whose u: claim is retired, so no caller ever reads the
+// drained u: family as "no users". It cannot be undone.
 func (p *PebbleStore) RequireUserDirectory() { p.users.required.Store(true) }
+
+// UserDirectoryRequired reports whether the store is marked as under core
+// identity (RequireUserDirectory or SetUserDirectory).
+func (p *PebbleStore) UserDirectoryRequired() bool { return p.users.required.Load() }
 
 // SetUserDirectory installs the account list of a store under core identity, and
 // marks it as under core identity (RequireUserDirectory). A nil dir leaves the

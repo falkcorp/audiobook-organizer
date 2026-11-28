@@ -375,3 +375,30 @@ func TestUserState_RunsAsTheCommand(t *testing.T) {
 	}
 	noIDsIn(t, stdout+stderr+err.Error())
 }
+
+// openOfflineStore installs no user directory: on a migrated store (core holds
+// _system, M3 drained u:) its account list is an error, never an empty list,
+// so an offline caller of a merge or delete gate stops instead of reading
+// "nobody has state". The store marks itself because its spec retires u:
+// (store/user_directory.go).
+func TestOpenOfflineStore_AMigratedStoresUserListIsAnErrorNeverEmpty(t *testing.T) {
+	userStateFixture(t)
+	st, closeStore, err := openOfflineStore(context.Background(), true)
+	if err != nil {
+		t.Fatalf("openOfflineStore: %v", err)
+	}
+	t.Cleanup(closeStore)
+	lister, ok := st.(interface {
+		ListUsers() ([]database.User, error)
+		ListUsersStrict() ([]database.User, error)
+	})
+	if !ok {
+		t.Fatalf("the offline store %T lists no users", st)
+	}
+	for name, list := range map[string]func() ([]database.User, error){"ListUsers": lister.ListUsers, "ListUsersStrict": lister.ListUsersStrict} {
+		users, err := list()
+		if !errors.Is(err, database.ErrNoUserDirectory) || users != nil {
+			t.Errorf("%s = %d users, %v; want ErrNoUserDirectory and no list", name, len(users), err)
+		}
+	}
+}
