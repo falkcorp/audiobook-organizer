@@ -1117,6 +1117,27 @@ var registeredGoneUnderIdentityAuthOff = goneUnderIdentity(
 	4, 0,
 )
 
+// authOffExportRefusedWhy names the one auth-off cell the diagnostics export's start
+// precondition moved (todo AUTH-OFF-EXPORT; internal/server/diagnostics_export_start.go).
+// R0 queued an export for the auth-disabled principal (202). Under core identity an
+// export is narrowed to the account that asked for it, and with authentication off no
+// account exists, so the start is refused (409) before anything is queued. The letter
+// stays A, the cell's class moves from 2xx to 4xx, and the principal loses a success:
+// the set of principals the route lets through shrinks.
+const authOffExportRefusedWhy = "AUTH-OFF-EXPORT: under core identity an export is built for the account that asked, and the auth-disabled principal has none, so the start precondition refuses it 409 before anything is queued (R0: 202); a lost success, not a gained one"
+
+// registeredAuthOffExportRefused: auth-off, one cell, no twin.
+var registeredAuthOffExportRefused = diffTable{
+	name:     "diagnostics export: the auth-disabled principal's start is refused (a change of class, letter A on both sides)",
+	want:     1,
+	wantTwin: 0,
+	rows: []diffRow{{
+		routes: []string{"POST /api/v1/diagnostics/export"}, who: []string{Authoff},
+		r0: 'A', flip: 'A', status: http.StatusConflict, r0Class: "2xx",
+		why: authOffExportRefusedWhy,
+	}},
+}
+
 // registeredDeletedAtFlip are R0's routes the identity flip deletes (F4-08 spec step
 // 3; internal/server routesDeletedAtTheFlip): no pattern matches them and they answer
 // 404 to every principal. Core's POST /api/core/v1/users/{id}/temp-login and POST
@@ -1445,7 +1466,7 @@ func TestRegisteredReach_Oracle(t *testing.T) {
 			t.Fatalf("no verdict: %v; canary drift: %v", pass.noVerdict, pass.canaryDrift)
 		}
 		diffs, compared := compareToR0(r0, pass)
-		h.checkDiffs(t, diffs, []diffTable{registeredAuthOffTightening, registeredBootstrapRefusedAuthOff, registeredGoneUnderIdentityAuthOff})
+		h.checkDiffs(t, diffs, []diffTable{registeredAuthOffTightening, registeredBootstrapRefusedAuthOff, registeredGoneUnderIdentityAuthOff, registeredAuthOffExportRefused})
 		if compared != registeredAuthOffCells {
 			t.Errorf("auth-off compared %d cells, pinned %d", compared, registeredAuthOffCells)
 		}

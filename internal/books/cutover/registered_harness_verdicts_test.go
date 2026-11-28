@@ -149,6 +149,7 @@ var verdictRows = []verdictRow{
 	{Method: "POST", Route: "/api/v1/auth/api-keys/:id/rotate", Class: classKnown, Principals: registeredRetiredRotate.rows[0].who,
 		Why: "retired stub: 410 to every caller once the credential guard is gone (approved reach contract 11-22; R0's 403 was HEAD's credential guard in front of the 410; nothing is minted); the oracle's registeredRetiredRotate holds the same 35 cells"},
 	{Method: "POST", Route: "/api/v1/update/apply", Class: classKnown, Principals: []string{"session:admin"}, Why: updateApplyStateWhy},
+	{Method: "POST", Route: "/api/v1/diagnostics/export", Class: classKnown, Principals: []string{Authoff}, Why: authOffExportRefusedWhy},
 }
 
 // authOffTightening is a route that R0 recorded as open to the auth-off principal and
