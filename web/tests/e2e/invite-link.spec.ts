@@ -19,6 +19,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { installCoreAuthMock, type CoreAuthMock } from './utils/mockCoreAuth';
 import { setupPhase2Interactive } from './utils/setup-modes';
+import { inviteLinkPath, legacyInviteLinkPath } from './utils/paths';
 
 const TOKEN = 'mci_selina-kyle-invite-link-0001';
 const INVITE = { token: TOKEN, username: 'dick.grayson', role: 'viewer' };
@@ -51,7 +52,7 @@ test.describe('Invite link (fragment form)', () => {
   test('opened signed out: shows the invite, accepting it signs the invitee in', async ({ page }) => {
     const mock = await boot(page);
 
-    await page.goto(`/invite#token=${TOKEN}`, { waitUntil: 'domcontentloaded' });
+    await page.goto(inviteLinkPath(TOKEN), { waitUntil: 'domcontentloaded' });
 
     // The invite page, with what the lookup returned.
     await expect(page.getByText(/This invitation is for/)).toContainText(INVITE.username);
@@ -80,7 +81,7 @@ test.describe('Invite link (fragment form)', () => {
   test('opened signed in: still shows the invite page, not NotFound', async ({ page }) => {
     const mock = await boot(page, 'bruce.wayne');
 
-    await page.goto(`/invite#token=${TOKEN}`, { waitUntil: 'domcontentloaded' });
+    await page.goto(inviteLinkPath(TOKEN), { waitUntil: 'domcontentloaded' });
 
     await expect(page.getByText(/This invitation is for/)).toContainText(INVITE.username);
     await expect(page.getByLabel('Choose a password')).toBeVisible();
@@ -93,7 +94,7 @@ test.describe('Invite link (fragment form)', () => {
     const mock = await boot(page);
 
     const stale = 'mci_oswald-cobblepot-spent-invite-0002';
-    await page.goto(`/invite#token=${stale}`, { waitUntil: 'domcontentloaded' });
+    await page.goto(inviteLinkPath(stale), { waitUntil: 'domcontentloaded' });
 
     await expect(page.getByLabel('Choose a password')).toHaveCount(0);
     await expect.poll(() => page.evaluate(() => window.location.hash)).toBe('');
@@ -108,7 +109,7 @@ test.describe('Invite link (fragment form)', () => {
     const mock = await boot(page);
 
     // An /invite/<token> link minted before the flip: no lookup, no form.
-    await page.goto(`/invite/${TOKEN}`, { waitUntil: 'domcontentloaded' });
+    await page.goto(legacyInviteLinkPath(TOKEN), { waitUntil: 'domcontentloaded' });
 
     await expect(page.getByLabel('Choose a password')).toHaveCount(0);
     expect(mock.requests.some((r) => r.url.endsWith('/auth/invites/lookup'))).toBe(false);

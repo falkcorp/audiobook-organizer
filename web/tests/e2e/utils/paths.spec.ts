@@ -21,11 +21,15 @@ import {
   bookPath,
   collectionPath,
   dedupPath,
+  inviteLinkPath,
+  legacyInviteLinkPath,
+  legacyTempLoginLinkPath,
   libraryPath,
   paths,
   reviewLanePath,
   reviewPath,
   settingsPath,
+  tempLoginLinkPath,
   urlContains,
   urlContainsAny,
   urlEndsWith,
@@ -53,6 +57,16 @@ test.describe('paths: values the specs used before', () => {
     expect(paths.dedupLabels).toBe('/dedup/labels');
     expect(paths.authorsDedup).toBe('/authors/dedup');
     expect(paths.booksDedup).toBe('/books/dedup');
+    expect(paths.invite).toBe('/invite');
+    expect(paths.tempLogin).toBe('/login/temp');
+    expect(paths.legacyTempLogin).toBe('/auth/temp-login');
+  });
+
+  test('one-time-token link pages', () => {
+    expect(inviteLinkPath('t0')).toBe('/invite#token=t0');
+    expect(legacyInviteLinkPath('t0')).toBe('/invite/t0');
+    expect(tempLoginLinkPath('t0')).toBe('/login/temp#token=t0');
+    expect(legacyTempLoginLinkPath('t0')).toBe('/auth/temp-login?token=t0');
   });
 
   test('library list and book detail', () => {
