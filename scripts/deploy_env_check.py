@@ -147,6 +147,35 @@ def parse_list(text: str) -> tuple[bool, dict[str, tuple[str, str]]]:
     return enforced, rows
 
 
+def _glob(pattern: str) -> "re.Pattern[str]":
+    """A list pattern as a regular expression: `*` is one or more characters,
+    anything else is literal (Go's envGlob, in internal/books/cutover)."""
+    return re.compile("^" + ".+".join(re.escape(p) for p in pattern.split("*")) + "$")
+
+
+FILE_SUFFIX = "_FILE"
+
+
+def listed(name: str, rows: dict[str, tuple[str, str]]) -> str | None:
+    """The list key `name` is retired under: the name itself, or the `*` pattern
+    it matches (the refused operator settings, e.g. the metadata credentials
+    family, whose names carry any source id). A name's <NAME>_FILE form is the
+    name: core reads any env name from the file a <NAME>_FILE variable names
+    (core/config/env.go), so `X_FILE` sets what `X` sets. None when it is not
+    retired. The rule is the list header's, and the F3-07 rehearsal applies the
+    same one to the same file."""
+    candidates = [name]
+    if name.endswith(FILE_SUFFIX) and len(name) > len(FILE_SUFFIX):
+        candidates.append(name[: -len(FILE_SUFFIX)])
+    for cand in candidates:
+        if cand in rows:
+            return cand
+        for key in rows:
+            if "*" in key and _glob(key).match(cand):
+                return key
+    return None
+
+
 def retired_in(path: Path, rows: dict[str, tuple[str, str]]) -> tuple[list[str] | None, str]:
     """(the retired names an Environment= line of path sets, why it could not
     be read). (None, "") when the file does not exist."""
@@ -156,7 +185,7 @@ def retired_in(path: Path, rows: dict[str, tuple[str, str]]) -> tuple[list[str] 
         return None, ""
     except (OSError, UnicodeDecodeError) as e:
         return None, f"cannot read {path} ({e})"
-    return sorted({n for n in env_names(text) if n in rows}), ""
+    return sorted({n for n in env_names(text) if listed(n, rows) is not None}), ""
 
 
 def check_retired(local_conf: Path, list_path: Path, unit_template: Path | None = None) -> int:
@@ -195,7 +224,7 @@ def check_retired(local_conf: Path, list_path: Path, unit_template: Path | None 
     for src, found in by_file.items():
         count += len(found)
         for name in found:
-            verdict, replacement = rows[name]
+            verdict, replacement = rows[listed(name, rows)]
             what = (
                 "the new binary refuses to boot on it"
                 if verdict == "refuse"

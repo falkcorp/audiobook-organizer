@@ -291,9 +291,9 @@ retired env WHISPER_MAX_IN_FLIGHT -> modules.books.whisper.max_in_flight warn
 
 ## openai_base_url
 top=true stored=blob class=i blob=openai_base_url admin=false fail-closed=false url=true
-target passthrough integrations.ai.openai.base_url convert=- destination env=ABO_INTEGRATIONS_AI_OPENAI_BASE_URL
-retired file openai_base_url -> integrations.ai.openai.base_url refuse Refuse
-retired env OPENAI_BASE_URL -> integrations.ai.openai.base_url kept
+target passthrough integrations.ai.openai.url convert=- destination env=ABO_INTEGRATIONS_AI_OPENAI_URL
+retired file openai_base_url -> integrations.ai.openai.url refuse Refuse
+retired env OPENAI_BASE_URL -> integrations.ai.openai.url kept
 
 ## abs_auth_probe_enabled
 top=true stored=blob class=k blob=abs_auth_probe_enabled admin=false fail-closed=false url=false
@@ -1989,8 +1989,8 @@ retired env ENABLED_SORT_INDEXES -> modules.books.search.enabled_sort_indexes wa
 
 ## metadata_sources[].credentials.<k>
 top=false stored=blob class=s blob=metadata_sources admin=false fail-closed=false url=false
-target secret integrations.metadata.<source id>.credentials.<k> convert=- passthrough env=-
-note plaintext in the blob
+target secret integrations.metadata.<source id>.credentials.<k> convert=- env=-
+note plaintext in the blob; a stored secret only: the operator layer no longer supplies it (RefusedOperatorPaths)
 
 ## plugins.webhook
 top=false stored=blob class=i blob=plugins admin=false fail-closed=false url=false

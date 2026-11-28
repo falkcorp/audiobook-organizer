@@ -1,7 +1,7 @@
 // file: core/app/options.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 55e09ad5-34c8-4d0f-b8d5-117718ebf0ed
-// last-edited: 2026-11-19
+// last-edited: 2026-11-28
 
 package app
 
@@ -83,7 +83,7 @@ type Options struct {
 	RetiredConfigNames []config.RetiredName
 	// ConfigEnvBindings are the app's ecosystem env names for passthrough
 	// paths (ABO: OPENAI_API_KEY and OPENAI_BASE_URL onto
-	// integrations.ai.openai.{api_key, base_url}), handed to
+	// integrations.ai.openai.{api_key, url}), handed to
 	// config.Options.EnvBindings; core and module keys declare theirs with
 	// config.EnvBinding (05-config §1.3.1). From F3; ABO passes it from F3-07.
 	ConfigEnvBindings []config.EnvName

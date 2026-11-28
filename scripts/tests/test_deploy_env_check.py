@@ -423,6 +423,166 @@ class RealList(unittest.TestCase):
         self.assertIn("WHISPER_REMOTE_URL", out + err)
 
 
+class RefusedOperatorSettings(Tmp):
+    """The refused operator settings (internal/books/cutover RefusedOperatorPaths):
+    the old openai path's canonical env name and the metadata credentials family,
+    read from the REAL generated list, because the point is that a host which
+    still sets one fails the deploy gate and not the boot. The refusal names the
+    key and the setting to use, and never the value."""
+
+    OPENAI_OLD = "ABO_INTEGRATIONS_AI_OPENAI_BASE_URL"
+    OPENAI_NEW = "ABO_INTEGRATIONS_AI_OPENAI_URL"
+    SENTINEL = "sentinel-gotham-7c1f.invalid"
+
+    def check(self, *names, unit=None):
+        conf = "[Service]\n" + "".join(f"Environment={n}=https://{self.SENTINEL}/v1\n" for n in names)
+        c = self.write("local.conf", conf)
+        argv = ["retired", "--local-conf", str(c), "--list", str(REPO / "deploy" / "retired-env-names.txt")]
+        if unit is not None:
+            argv += ["--unit-template", str(self.write("audiobook-organizer.service", unit))]
+        return run(argv)
+
+    def test_the_old_openai_env_name_is_refused_naming_the_new_one(self):
+        rc, out, err = self.check(self.OPENAI_OLD)
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn(self.OPENAI_OLD, err)
+        self.assertIn(self.OPENAI_NEW, err)
+        self.assertIn("refuses to boot", err)
+
+    def test_the_new_openai_env_name_passes(self):
+        rc, out, err = self.check(self.OPENAI_NEW)
+        self.assertEqual(rc, 0, out + err)
+
+    def test_the_value_is_never_printed(self):
+        for names in ((self.OPENAI_OLD,), ("ABO_INTEGRATIONS_METADATA_HARDCOVER_CREDENTIALS_API_TOKEN",)):
+            rc, out, err = self.check(*names)
+            self.assertEqual(rc, 1, out + err)
+            self.assertNotIn(self.SENTINEL, out + err)
+
+    def test_a_metadata_credential_is_refused_for_any_source_and_key(self):
+        for name in (
+            "ABO_INTEGRATIONS_METADATA_GOOGLE_BOOKS_CREDENTIALS_API_KEY",
+            "ABO_INTEGRATIONS_METADATA_HARDCOVER_CREDENTIALS_API_TOKEN",
+            "ABO_INTEGRATIONS_METADATA_AUDNEXUS_CREDENTIALS_X",
+        ):
+            rc, out, err = self.check(name)
+            self.assertEqual(rc, 1, f"{name}: {out}{err}")
+            self.assertIn(name, err)
+            self.assertIn("stored secret", err)
+            self.assertNotIn("became no setting", err)
+
+    def test_the_declared_four_segment_metadata_secrets_pass(self):
+        rc, out, err = self.check(
+            "ABO_INTEGRATIONS_METADATA_HARDCOVER_API_TOKEN",
+            "ABO_INTEGRATIONS_METADATA_GOOGLE_BOOKS_API_KEY",
+        )
+        self.assertEqual(rc, 0, out + err)
+
+    def test_a_refused_setting_in_the_unit_template_is_refused_too(self):
+        unit = f"[Service]\nEnvironment={self.OPENAI_OLD}=x\n"
+        rc, out, err = self.check("BATCAVE", unit=unit)
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("audiobook-organizer.service", err)
+
+    def test_a_pattern_row_needs_something_on_each_side_of_the_star(self):
+        rows = {"ABO_X_*_Y_*": ("refuse", "z")}
+        self.assertEqual(chk.listed("ABO_X_ONE_Y_TWO", rows), "ABO_X_*_Y_*")
+        self.assertIsNone(chk.listed("ABO_X__Y_", rows))
+        self.assertIsNone(chk.listed("ABO_X_Y_TWO", rows))
+        self.assertIsNone(chk.listed("PREFIX_ABO_X_ONE_Y_TWO", rows))
+
+    def test_the_real_list_holds_both_rows(self):
+        _, rows = chk.parse_list((REPO / "deploy" / "retired-env-names.txt").read_text())
+        self.assertEqual(rows[self.OPENAI_OLD], ("refuse", self.OPENAI_NEW))
+        self.assertEqual(rows["ABO_INTEGRATIONS_METADATA_*_CREDENTIALS_*"][0], "refuse")
+
+
+    def test_the_file_spelling_of_a_refused_setting_is_refused(self):
+        # core reads NAME_FILE as NAME (core/config/env.go), so a deploy file that
+        # sets the retired openai name that way reached the retired path on main.
+        for name in (
+            self.OPENAI_OLD + "_FILE",
+            "ABO_INTEGRATIONS_METADATA_HARDCOVER_CREDENTIALS_API_TOKEN_FILE",
+            "ABO_INTEGRATIONS_METADATA_GOOGLE_BOOKS_CREDENTIALS_API_KEY_FILE",
+        ):
+            rc, out, err = self.check(name)
+            self.assertEqual(rc, 1, f"{name}: {out}{err}")
+            self.assertIn(name, err)
+            self.assertNotIn(self.SENTINEL, out + err)
+
+    def test_the_new_openai_name_as_a_file_passes(self):
+        rc, out, err = self.check(self.OPENAI_NEW + "_FILE")
+        self.assertEqual(rc, 0, out + err)
+
+    def test_the_file_rule_applies_to_every_row_of_a_list(self):
+        rows = {"ABO_OLD_NAME": ("refuse", "ABO_NEW_NAME"), "ABO_X_*_Y_*": ("refuse", "z")}
+        self.assertEqual(chk.listed("ABO_OLD_NAME_FILE", rows), "ABO_OLD_NAME")
+        self.assertEqual(chk.listed("ABO_X_ONE_Y_TWO_FILE", rows), "ABO_X_*_Y_*")
+        self.assertIsNone(chk.listed("_FILE", rows))
+        self.assertIsNone(chk.listed("ABO_OLD_NAME_FILEX", rows))
+        self.assertIsNone(chk.listed("ABO_OLD_NAME_FOO", rows))
+        self.assertIsNone(chk.listed("ABO_NEW_NAME_FILE", rows))
+
+
+class RefusedEnvCells(unittest.TestCase):
+    """The table shared with the Go test (cutover.TestRefusedOperatorPaths_EnvCells):
+    the same spellings, run through this checker over the real generated list, so
+    the Go matcher and this one cannot drift apart."""
+
+    CELLS = REPO / "internal" / "books" / "cutover" / "testdata" / "refused_env_cells.json"
+
+    def test_every_cell_agrees_with_the_real_list(self):
+        import json
+
+        cells = json.loads(self.CELLS.read_text())["cells"]
+        self.assertGreater(len(cells), 0)
+        _, rows = chk.parse_list((REPO / "deploy" / "retired-env-names.txt").read_text())
+        for c in cells:
+            key = chk.listed(c["name"], rows)
+            got = key is not None and rows[key][0] == "refuse"
+            self.assertEqual(got, c["refused"], f"{c['name']}: {c['why']}")
+
+
+class OneSourceOfTruth(unittest.TestCase):
+    """The refused list lives once: cutover.RefusedOperatorPaths, generated into
+    deploy/retired-env-names.txt (TestRetiredEnvList_InSync fails when they
+    differ). This checker reads that file and carries no copy of any name."""
+
+    LIST = REPO / "deploy" / "retired-env-names.txt"
+
+    def test_the_default_list_is_the_generated_file(self):
+        self.assertEqual(chk.LIST_PATH.resolve(), self.LIST.resolve())
+
+    def test_the_effective_list_is_exactly_the_file(self):
+        # An independent read of the file, not parse_list: every row of the file,
+        # and nothing else, is in the effective list.
+        want = {}
+        for line in self.LIST.read_text().splitlines():
+            if line and not line.startswith("#"):
+                name, verdict, replacement = line.split("\t")
+                want[name] = (verdict, replacement)
+        _, got = chk.parse_list(self.LIST.read_text())
+        self.assertEqual(got, want)
+        self.assertIn("ABO_INTEGRATIONS_AI_OPENAI_BASE_URL", got)
+        self.assertIn("ABO_INTEGRATIONS_METADATA_*_CREDENTIALS_*", got)
+
+    def test_every_row_is_reached_in_both_spellings(self):
+        _, rows = chk.parse_list(self.LIST.read_text())
+        for key in rows:
+            concrete = key.replace("*", "BATMAN")
+            self.assertEqual(chk.listed(concrete, rows), key, key)
+            self.assertEqual(chk.listed(concrete + "_FILE", rows), key, key + "_FILE")
+
+    def test_the_header_states_the_file_rule(self):
+        head = "\n".join(ln for ln in self.LIST.read_text().splitlines() if ln.startswith("#"))
+        self.assertIn("_FILE", head)
+
+    def test_the_script_holds_no_copy_of_a_refused_name(self):
+        text = (SCRIPTS / "deploy_env_check.py").read_text()
+        for needle in ("ABO_INTEGRATIONS", "CREDENTIALS_", "OPENAI"):
+            self.assertNotIn(needle, text, f"scripts/deploy_env_check.py carries {needle}: the list is the file's")
+
+
 class PreflightRunsTheCheck(Tmp):
     """deploy-preflight.sh is the one thing a not-yet-synced Makefile.local
     still calls, so it must run the checker, in the caller's directory."""

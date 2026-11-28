@@ -301,7 +301,7 @@ func TestFlipConfigNames_Lists(t *testing.T) {
 		}
 	}
 	want := []coreconfig.EnvName{{Name: "OPENAI_API_KEY", Path: "integrations.ai.openai.api_key"},
-		{Name: "OPENAI_BASE_URL", Path: "integrations.ai.openai.base_url"}}
+		{Name: "OPENAI_BASE_URL", Path: "integrations.ai.openai.url"}}
 	if !slices.Equal(opts.ConfigEnvBindings, want) {
 		t.Errorf("bindings = %v, want %v", opts.ConfigEnvBindings, want)
 	}

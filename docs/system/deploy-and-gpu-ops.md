@@ -1,7 +1,7 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.22.0 -->
+<!-- version: 1.23.0 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
-<!-- last-edited: 2026-11-18 -->
+<!-- last-edited: 2026-11-28 -->
 
 # Deploy Rollback & Windows GPU Keepalive
 
@@ -1039,6 +1039,19 @@ reads no host.
   marker is derived from the source, so the change that wires
   `RetiredConfigNames` fails that test until the list is regenerated, and
   from then on the check refuses.
+- **Patterns and the `_FILE` form.** A row whose name has a `*` is a pattern
+  (`*` is one or more characters; the metadata credentials family is one such
+  row, and the old `ABO_INTEGRATIONS_AI_OPENAI_BASE_URL` is a plain one). The
+  check reads `<NAME>_FILE` as `<NAME>` for every row, because core reads any
+  variable from the file a `<NAME>_FILE` names. Names are matched in capitals
+  only, as core reads them. The list is the one source: the script carries no
+  copy of it, and a test fails if what it reads differs from the file.
+- **What it does not see.** The preflight reads only `deploy/local.conf` and
+  the unit template. It does not follow `EnvironmentFile=`, and it reads no
+  host. A variable set in the live environment or in a file the unit loads, and
+  a key of the operator file, are caught at start and by
+  `audiobook-organizer config check` (run it on the host with the service's
+  environment and flags), not here.
 - **`Makefile.local`.** Its `deploy` and `deploy-debug` must install through
   `install-staged` (a `sudo mv` or `sudo cp` keeps no `.prev`, unit or
   `local.conf`). `DEPLOY_ALLOW_NO_ROLLBACK=1 make deploy` deploys anyway, with

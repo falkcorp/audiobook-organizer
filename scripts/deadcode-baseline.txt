@@ -1105,6 +1105,7 @@ internal/books/cutover/m5.level
 internal/books/cutover/m5.parseKey
 internal/books/cutover/m5.usable
 internal/books/cutover/m6.Config.checkReads
+internal/books/cutover/m6.EffectiveFromPassthrough
 internal/books/cutover/m6.ImportPathID
 internal/books/cutover/m6.Migration.Step
 internal/books/cutover/m6.Migration.Verify
@@ -1180,6 +1181,7 @@ internal/books/cutover/m6.mapCaps
 internal/books/cutover/m6.metadataLimits
 internal/books/cutover/m6.newMigration
 internal/books/cutover/m6.nonEmpty
+internal/books/cutover/m6.operatorField
 internal/books/cutover/m6.originOf
 internal/books/cutover/m6.pending.cleanURL
 internal/books/cutover/m6.pending.finish

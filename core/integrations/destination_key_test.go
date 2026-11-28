@@ -1,7 +1,7 @@
 // file: core/integrations/destination_key_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 13da395a-9492-4e4a-abd8-21a1eb00e67e
-// last-edited: 2026-11-11
+// last-edited: 2026-11-28
 
 package integrations_test
 
@@ -193,5 +193,38 @@ func TestPut_ResupplyAfterKeyMove(t *testing.T) {
 	}
 	if h, _ := r.Health(ctx, perchRef); h.Status != integrations.HealthOK || sentWith(e, "alfred-2") != 1 || sentWith(e, "alfred-1") != 0 {
 		t.Errorf("Health = %+v, sent %v", h, e.out.Sent())
+	}
+}
+
+// TestBind_OperatorURLOverlayAtAnotherOriginWithholdsTheStoredKey is N6 of round 1
+// of #5080. After the flip OPENAI_BASE_URL and ABO_INTEGRATIONS_AI_OPENAI_URL
+// reach the ai/openai instance's url overlay, which main ignored: a host whose
+// environment sets one now moves the destination. A key an admin stored for
+// another origin must stay stored and not be sent to the overlay's origin
+// (effective.go: the stored secrets are served only while SecretsOrigin equals
+// the effective destinations). The control is the same overlay at the origin the
+// key was written for, where it is served, so the cell fails an implementation
+// that withholds everything as surely as one that withholds nothing.
+func TestBind_OperatorURLOverlayAtAnotherOriginWithholdsTheStoredKey(t *testing.T) {
+	const (
+		written = "http://192.0.2.20/"
+		moved   = "http://192.0.2.99/"
+	)
+	e := newEnv(t)
+	mustPut(t, admin(), e.registry(t, nil, nil), perch(map[string]any{"url": written}), cred("alfred-1"))
+	if row, _ := e.stored(t, perchRef); row.SecretsOrigin != "url=http://192.0.2.20:80" {
+		t.Fatalf("SecretsOrigin = %q", row.SecretsOrigin)
+	}
+	// Control: the overlay names the origin the key was written for.
+	same := e.registry(t, overlay("integrations.notify.wayne-perch.url", written), nil)
+	if h, _ := same.Health(context.Background(), perchRef); h.Status != integrations.HealthOK || !slices.Equal(e.credentialsSentTo(written), []string{"alfred-1"}) {
+		t.Fatalf("Health with the overlay at the origin the key was written for = %+v, sent %v", h, e.out.Sent())
+	}
+	before := sentWith(e, "alfred-1")
+	// The overlay moves the destination: the key is withheld and goes nowhere.
+	r := e.registry(t, overlay("integrations.notify.wayne-perch.url", moved), nil)
+	requireWithheld(t, e, r, before)
+	if got := e.credentialsSentTo(moved); len(got) != 0 {
+		t.Errorf("the stored key was sent to the overlay's origin: %v", got)
 	}
 }

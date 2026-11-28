@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/appconfig"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -40,6 +41,9 @@ func OperatorAppConfig(ctx context.Context, mod module.Module, boot BootInputs) 
 		return config.Config{}, err
 	}
 	if err := refuseHEADKeyedConfigFile(boot.ConfigFile); err != nil {
+		return config.Config{}, err
+	}
+	if err := RefuseRetiredOperatorSettings(boot.ConfigFile, os.Environ()); err != nil {
 		return config.Config{}, err
 	}
 	opts := bootOptions(boot)

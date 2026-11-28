@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.14.4 -->
+<!-- version: 1.14.5 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
-<!-- last-edited: 2026-11-19 -->
+<!-- last-edited: 2026-11-28 -->
 
 # 05 — Config and secrets (`core/config`, `core/secrets`)
 
@@ -280,7 +280,7 @@ type Options struct {
 	// integrations.<kind>.<instance>.<field> paths of 05-metadata M1 (C11).
 	Passthrough func(Path) bool
 	// EnvBindings are the app's ecosystem env names for passthrough paths (ABO: OPENAI_API_KEY and
-	// OPENAI_BASE_URL onto integrations.ai.openai.{api_key, base_url}), from app.Options.ConfigEnvBindings. Core
+	// OPENAI_BASE_URL onto integrations.ai.openai.{api_key, url}), from app.Options.ConfigEnvBindings. Core
 	// and module keys declare theirs with EnvBinding (§1.3.1).
 	EnvBindings []EnvName
 	// Retired is the app's list of retired env names and file keys (ABO: generated from its rename table,
@@ -621,7 +621,7 @@ per-app prefixes keep two apps' variables apart on one host or, at lowest priori
 `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, `OTEL_METRIC_EXPORT_INTERVAL` (a bare
 integer is milliseconds, the OTel convention, which the binding's decoder keeps) and
 `OTEL_EXPORTER_OTLP_METRICS_INSECURE`, declared by [05-metrics](05-metrics.md) §10 with `EnvBinding`; and the app's
-`OPENAI_API_KEY` and `OPENAI_BASE_URL` onto `integrations.ai.openai.{api_key, base_url}`, passed by ABO in
+`OPENAI_API_KEY` and `OPENAI_BASE_URL` onto `integrations.ai.openai.{api_key, url}`, passed by ABO in
 `Options.EnvBindings`. A binding is a second canonical name, not an alias of an older one; it never warns.
 
 **Retired names (normative).** The app hands config the list of every env name and top-level file key it read
@@ -1453,7 +1453,7 @@ of M6, `o` operator-only at HEAD (nothing to migrate; its retired names follow �
 | `whisper_batch_sleep_ms` | blob | `modules.books.whisper.batch_sleep_ms` | k | |
 | `whisper_batch_size` | blob | `modules.books.whisper.batch_size` | k | |
 | `whisper_max_in_flight` | blob | `modules.books.whisper.max_in_flight` | k | |
-| `openai_base_url` | blob | `integrations.ai.openai.base_url` | i | |
+| `openai_base_url` | blob | `integrations.ai.openai.url` | i | |
 | `abs_auth_probe_enabled` | blob | `modules.books.abs.auth_probe_enabled` | k | |
 | `authority_evidence_enabled` | blob | `modules.books.metadata.authority_evidence_enabled` | k | |
 | `retire_versions_apply_enabled` | blob | `modules.books.versions.retire_versions_apply_enabled` | k | |
