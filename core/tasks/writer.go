@@ -31,6 +31,28 @@ type Writer interface {
 	RowApplied(ctx context.Context, rowID string) (bool, error) // via ChangeSink.Stands
 }
 
+// WritableWriter is an optional capability of a run's Writer: Writable reports
+// whether the run may still write, with the same refusal Do gives before it
+// writes (ErrFenced: the run was canceled, abandoned, timed out, or lost its
+// stand-down hold). It exists for the store calls that name no Effects
+// resource, which Do refuses by construction (CheckWrite fails closed on a write
+// that names none): a module's gate asks it before running such a call, so a
+// stopped run does not write through the one path that has no resource to
+// stamp. It checks and records nothing: no intent, no epoch.
+type WritableWriter interface {
+	Writer
+	Writable() error
+}
+
+// CheckWritable is w.Writable() for a Writer that has it, nil for one that does
+// not (a test double: the executor's writer always has it).
+func CheckWritable(w Writer) error {
+	if ww, ok := w.(WritableWriter); ok {
+		return ww.Writable()
+	}
+	return nil
+}
+
 // Write names one gated write: one call to the module's store, however many
 // resources that call can touch.
 //

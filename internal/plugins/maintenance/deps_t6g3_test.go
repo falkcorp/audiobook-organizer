@@ -210,7 +210,7 @@ func TestBooksT6G3Writer_EveryKindsCallsAreAdmittedByItsOwnEffects(t *testing.T)
 // TestBooksT6G3Writer_EmptyRowMethodsStayUnfencedAndTheCoreOwnsTheMode pins the
 // decision for the methods whose row is empty. Control: the builder's own
 // ReplaceOpRowsPrefix reaches the store in a Preview run (the gate does not stop
-// it). Proof: a Preview run of the one core that calls it does not reach it,
+// it for its mode; it refuses only a stopped run). Proof: a Preview run of the one core that calls it does not reach it,
 // because the core derives Apply from the run's mode.
 func TestBooksT6G3Writer_EmptyRowMethodsStayUnfencedAndTheCoreOwnsTheMode(t *testing.T) {
 	src, host, _ := g3Fixture(t)
@@ -221,7 +221,7 @@ func TestBooksT6G3Writer_EmptyRowMethodsStayUnfencedAndTheCoreOwnsTheMode(t *tes
 	def := t6g1ByKind3(t, deps, "books.maintenance.credits-backfill")
 	preview := writertest.New(def, tasks.ModePreview)
 	calls["ReplaceOpRowsPrefix"](deps.NewWriter(preview))
-	require.EqualValues(t, 1, src.replaced.Load(), "control: the gate does not fence an empty-row method")
+	require.EqualValues(t, 1, src.replaced.Load(), "control: the gate does not stop an empty-row method for its mode (it refuses only a stopped run: writer.TestGate_EmptyRowCancelTimeoutLease)")
 	require.Empty(t, preview.Writes())
 
 	src.replaced.Store(0)

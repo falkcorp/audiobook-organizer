@@ -60,7 +60,8 @@ func New(w tasks.Writer, rows Rows) *Gate { return &Gate{w: w, rows: rows} }
 // Stamp is the tasks.Write for one call of method on subject: the whole row,
 // sorted so the recorded intent does not depend on the row's literal order.
 // ok is false when the method has no row. A method with an empty row stamps no
-// resource, and Do does not call the writer for it: nothing is fenced.
+// resource, and Do does not call Writer.Do for it; it asks the writer only
+// whether the run may still write (tasks.CheckWritable).
 func (g *Gate) Stamp(method string, subject entity.Ref) (w tasks.Write, ok bool) {
 	row, ok := g.rows[method]
 	if !ok {
@@ -72,22 +73,24 @@ func (g *Gate) Stamp(method string, subject entity.Ref) (w tasks.Write, ok bool)
 // Do performs one gated store call. It refuses with ErrNoRow (and
 // tasks.ErrOutsideEffects) for a method with no row, without calling fn.
 //
-// A method whose row is empty writes no Effects resource, and fn runs with NO
-// fence: no writable (permit) check, no Preview check, no write-ahead intent.
-// That is not "writes nothing". Of the seven empty rows of the shared table
+// A method whose row is empty writes no Effects resource: fn runs with no Preview
+// check and no write-ahead intent, but NOT past a stopped run: the gate first
+// asks the run's writer whether it may still write (tasks.CheckWritable: the
+// executor's own permit and stand-down lease check, the one Do makes), and a
+// refusal leaves fn uncalled. A writer with no such check (a test double, or
+// the no-run writer of a ReadOnly kind) lets it through, as before. That is
+// not "writes nothing". Of the seven empty rows of the shared table
 // (internal/maintenance/resources), three write nothing themselves
 // (InvalidateAuthorsCache drops an in-memory cache, NewUserStateProbe builds a
 // probe, HardDeleteWithoutUserState wraps a closure whose writes are their own
 // calls) and four do write: the system:backfill: sentinel that
 // MarkBookAggregatesBackfillDone puts, and the op rows of ReplaceOpRowsPrefix,
 // SaveClassLists and ClearClassLists. Those are ledger and store-maintained
-// writes that belong to no Effects resource, so they pass unfenced and the
-// CALLER owns the mode and the permit (for example
+// writes that belong to no Effects resource, so they carry no stamp (no intent,
+// no epoch) and the CALLER owns the mode (for example
 // internal/maintenance/jobs/recompute_book_aggregates.go checks the mode before
-// it calls the store). Behaviour matches the code before the gate. No
-// metafetch.Store method has an empty row. F5-18c builds the group writers on
-// Gate: it must decide, per group, whether a method with an empty row may stay
-// outside the fence or needs a stamp of its own; do not assume Do covers it.
+// it calls the store); the stopped-run refusal is the gate's. No
+// metafetch.Store method has an empty row.
 //
 // Every other method is ONE Writer.Do stamped with the whole row; a refusal
 // (fenced, preview, outside Effects) leaves fn uncalled.
@@ -97,6 +100,12 @@ func (g *Gate) Do(ctx context.Context, method string, subject entity.Ref, fn fun
 		return fmt.Errorf("%w: %w: %s", tasks.ErrOutsideEffects, ErrNoRow, method)
 	}
 	if len(w.Resources) == 0 {
+		// No resource to stamp: Writer.Do would refuse, so fn runs outside it, but
+		// not past a stopped run. Liveness only: no intent and no epoch, which stay
+		// row-only (F5-18 commit 1).
+		if err := tasks.CheckWritable(g.w); err != nil {
+			return err
+		}
 		_, err := fn(ctx)
 		return err
 	}

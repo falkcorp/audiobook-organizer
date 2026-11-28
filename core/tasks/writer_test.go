@@ -6,6 +6,7 @@
 package tasks_test
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -54,5 +55,32 @@ func TestCheckWrite_NamesEveryRefusedStamp(t *testing.T) {
 	}
 	if err := tasks.CheckWrite("gotham.k", declared, tasks.Write{Name: "gotham.note"}); !errors.Is(err, tasks.ErrOutsideEffects) || !strings.Contains(err.Error(), "no resource") {
 		t.Errorf("a write that names nothing: %v", err)
+	}
+}
+
+// bareWriter is a tasks.Writer with no liveness check.
+type bareWriter struct{ tasks.Writer }
+
+// stopWriter is a tasks.WritableWriter whose run may be stopped.
+type stopWriter struct {
+	bareWriter
+	err error
+}
+
+func (w stopWriter) Writable() error { return w.err }
+
+func (bareWriter) Do(context.Context, tasks.Write, func(context.Context) ([]tasks.Change, error)) error {
+	return nil
+}
+
+func TestCheckWritable_AsksAWriterThatCanAnswerAndPassesOneThatCannot(t *testing.T) {
+	if err := tasks.CheckWritable(bareWriter{}); err != nil {
+		t.Fatalf("a writer with no liveness check is writable, got %v", err)
+	}
+	if err := tasks.CheckWritable(stopWriter{}); err != nil {
+		t.Fatalf("a live run is writable, got %v", err)
+	}
+	if err := tasks.CheckWritable(stopWriter{err: tasks.ErrFenced}); !errors.Is(err, tasks.ErrFenced) {
+		t.Fatalf("a stopped run is refused with ErrFenced, got %v", err)
 	}
 }

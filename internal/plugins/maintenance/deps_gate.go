@@ -40,8 +40,8 @@ type booksGate struct{ g *writer.Gate }
 // newBooksGate builds the gate over the run's writer and the group's rows. A nil
 // w is a ReadOnly kind (core hands a ReadOnly run no tasks.Writer): every gated
 // write then refuses instead of dereferencing nil. The methods whose row is
-// empty never reach w (see writer.Gate.Do), so they work for a ReadOnly kind as
-// they did.
+// empty never reach w's Do and a ReadOnly kind has no liveness check to refuse
+// them (see writer.Gate.Do), so they work for a ReadOnly kind as they did.
 func newBooksGate(w tasks.Writer, rows map[string][]ops.Resource) booksGate {
 	return booksGate{g: writer.ForRun(w, writer.Rows(rows))}
 }

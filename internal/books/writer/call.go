@@ -46,8 +46,9 @@ func Ref(resource, id string) entity.Ref {
 // ForRun is New for one run's tasks.Writer. A nil w is a ReadOnly kind (core
 // hands a ReadOnly run no tasks.Writer): every gated write then refuses with
 // tasks.ErrOutsideEffects instead of dereferencing nil. A method whose row is
-// empty never reaches w (see Gate.Do), so it works for a ReadOnly kind as it
-// did before the gate.
+// empty never reaches w's Do (see Gate.Do) and the no-run writer has no
+// liveness check to refuse it, so it works for a ReadOnly kind as it did before
+// the gate.
 func ForRun(w tasks.Writer, rows Rows) *Gate {
 	if w == nil {
 		w = noRunWriter{}

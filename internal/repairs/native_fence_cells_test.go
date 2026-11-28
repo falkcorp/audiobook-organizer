@@ -276,5 +276,5 @@ func TestNativeFence_RepairsApply_LeaseLossControlAppliesBothRowsUnderALiveHold(
 // tasks.ErrHoldLost on a lapse. Re-run this cell, un-skipped, after #5062 is on
 // the base: its body is the cancel cell with the stop being the lapse.
 func TestNativeFence_RepairsApply_LeaseLostMidRowAfterPR5062(t *testing.T) {
-	t.Skip("needs #5062: at the base a lapsed hold does not end the run context, so a write inside a row's own Apply is not refused until the next Do (named in the F5-18 commit 1 hand-back)")
+	t.Skip("needs #5062 (Hold.Renew and the lapse cancel with tasks.ErrHoldLost), which is not on the base: until a lapse ends the run context, the repairs fence (it reads the context) cannot see a lapse, and the repairs writer's own writes do not pass core's Writer.Do, so a write inside a row's own Apply after the lapse is not refused until the next row. The flip's switch commit is cut on a main that contains #5062; un-skip this cell there: its body is the cancel cell with the stop being the lapse (standDownLeaseOpt, a Fixer that takes a hold and outlasts the lease before its write).")
 }
