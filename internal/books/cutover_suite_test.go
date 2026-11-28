@@ -1010,7 +1010,13 @@ type storeScan struct {
 	// migrations' state and reports, the level stamps), kept at every size:
 	// storage's keyspace holds tens of rows, not a family's thousands.
 	storageRows map[string][]byte
-	rows        map[string][]byte // every books key, small stores only
+	// coreIdentity are core's identity records (c/auth/, c/rbac/), where M3
+	// writes, and identityRows HEAD's user and OAuth identity rows (u:,
+	// oauthid:), what M3 reads: both kept at every size, the identity families
+	// being tens to hundreds of rows. The ID check reads them (cutover_coreview_test.go).
+	coreIdentity map[string][]byte
+	identityRows map[string][]byte
+	rows         map[string][]byte // every books key, small stores only
 }
 
 type scanSpec struct {
@@ -1080,6 +1086,8 @@ func newStoreScan(spec scanSpec) *storeScan {
 		coreTokens:     map[string]bool{},
 		quarantinedIDs: map[string]bool{},
 		storageRows:    map[string][]byte{},
+		coreIdentity:   map[string][]byte{},
+		identityRows:   map[string][]byte{},
 	}
 	if spec.keepRows {
 		s.rows = map[string][]byte{}
@@ -1100,6 +1108,9 @@ func (s *storeScan) add(fi familyIndex, spec scanSpec, key, val []byte) {
 		if bytes.HasPrefix(key, []byte(storageKeyspace)) {
 			s.storageRows[string(key)] = slices.Clone(val)
 		}
+		if bytes.HasPrefix(key, []byte(coreAuthKeyspace)) || bytes.HasPrefix(key, []byte(coreRBACKeyspace)) {
+			s.coreIdentity[string(key)] = slices.Clone(val)
+		}
 		if bytes.HasPrefix(key, []byte("c/storage")) && bytes.Contains(key, []byte("quarantine")) {
 			if q, ok := decodeQuarantine(val); ok {
 				s.Quarantine = append(s.Quarantine, q)
@@ -1111,6 +1122,9 @@ func (s *storeScan) add(fi familyIndex, spec scanSpec, key, val []byte) {
 			s.digestOf(s.Families, fam).add(key, val)
 		}
 		return
+	}
+	if fam == "u:" || fam == "oauthid:" {
+		s.identityRows[string(key)] = slices.Clone(val)
 	}
 	if kind, ok := idKinds[fam]; ok {
 		if s.IDs[kind] == nil {
@@ -1240,7 +1254,11 @@ func countProblems(steps []cutoverStep, before, after *storeScan) []string {
 // Residual key (M2's settings blob, rewritten in place, never quarantined
 // whole), the record must name that member exactly, the key M2 writes
 // (cutover.quarantineKey), so a member quarantined in error, or a case's
-// member left in the rewritten row, is reported too.
+// member left in the rewritten row, is reported too. A case key that is an
+// entity row of another kind than the case's entity (KeyPrefix) is a holder of
+// an entry naming that entity (role-all-unknown's users, whose role lists name
+// the quarantined role): it is imported with the entry dropped, so a record
+// naming it is a row quarantined in error.
 func quarantineProblems(steps []cutoverStep, cases []r2Stage2Case, recs []quarantineRecord) []string {
 	var out []string
 	inAnySource := func(k string) bool {
@@ -1266,8 +1284,10 @@ func quarantineProblems(steps []cutoverStep, cases []r2Stage2Case, recs []quaran
 		return kind + " " + k[len(fam):], ok
 	}
 	owner := map[string]string{}
-	want := map[string]string{} // entity -> case label
+	want := map[string]string{}    // entity -> case label
+	holders := map[string]string{} // a holder row -> case label
 	for _, c := range cases {
+		caseKind, hasKind := idKinds[fi.family([]byte(c.KeyPrefix))]
 		for _, k := range c.Keys {
 			if isMember(k) {
 				owner[k] = c.Label
@@ -1275,6 +1295,14 @@ func quarantineProblems(steps []cutoverStep, cases []r2Stage2Case, recs []quaran
 			}
 			row, _, _ := strings.Cut(k, "#")
 			if !inAnySource(row) {
+				continue
+			}
+			// An entity row of another kind than the case's is a holder: a
+			// user whose role list names the quarantined role. The entry goes
+			// with the role (05-rbac §6.3); the row is imported, never
+			// quarantined.
+			if kind, isEntity := idKinds[fi.family([]byte(row))]; isEntity && hasKind && kind != caseKind {
+				holders[row] = c.Label
 				continue
 			}
 			owner[row] = c.Label
@@ -1286,6 +1314,10 @@ func quarantineProblems(steps []cutoverStep, cases []r2Stage2Case, recs []quaran
 	got := map[string]bool{}
 	labels := map[string]bool{}
 	for _, r := range recs {
+		if label, ok := holders[string(r.Key)]; ok {
+			out = append(out, fmt.Sprintf("%s quarantined %q, which overlay case %s names only as the holder of an entry naming its entity: the row is imported, the entry dropped", r.Step, r.Key, label))
+			continue
+		}
 		label, ok := owner[string(r.Key)]
 		if !ok {
 			out = append(out, fmt.Sprintf("%s quarantined %q, which is no overlay quarantine case", r.Step, r.Key))
@@ -1323,12 +1355,21 @@ func idResolves(kind, id string, after *storeScan) (kept, quarantined bool) {
 
 // idProblems: 14 E2, every user, role, key, OAuth identity, import-root and
 // run ID of the before-store is kept (or quarantined, with its count in the
-// referential check).
+// referential check). An ID M3 writes in core's form is looked up where M3
+// writes it (identityIDKept): a custom role under custom.<slug of its ID>, an
+// OAuth identity under its (provider, subject), and HEAD's _system row under
+// core's system user ID.
 func idProblems(before, after *storeScan) []string {
 	var out []string
 	for _, kind := range sortedKeys(before.IDs) {
 		for _, id := range sortedKeys(before.IDs[kind]) {
-			if kept, q := idResolves(kind, id, after); !kept && !q {
+			if kept, q := idResolves(kind, id, after); kept || q {
+				continue
+			}
+			switch kept, problem := identityIDKept(kind, id, before, after); {
+			case problem != "":
+				out = append(out, problem)
+			case !kept:
 				out = append(out, fmt.Sprintf("%s ID %s is gone after the cutover", kind, id))
 			}
 		}
@@ -1883,6 +1924,10 @@ func TestCutoverOnR0Corpus(t *testing.T) {
 		requireNoProblems(t, "the legacy bookkeeping (grow-only)", bookkeepingProblems(r.before, r.after))
 		requireNoProblems(t, "per-family counts", countProblems(r.steps, r.before, r.after))
 		requireNoProblems(t, "the quarantine report", quarantineProblems(r.steps, c.quarantineCases, r.after.Quarantine))
+		t.Run("identity-counts", func(t *testing.T) {
+			requireNoProblems(t, "M3's stored counts", identityCountProblems(r.steps, r.before, r.after))
+		})
+		t.Run("role-holders", func(t *testing.T) { checkRoleHolders(t, c, r) })
 		t.Logf("%d steps; %d keys before, %d after; checkpoint taken: %q", len(r.steps), r.before.Total, r.after.Total, r.checkpoint)
 		require.Empty(t, r.checkpointProblem)
 		if c.name != "shaped" {
@@ -1925,6 +1970,7 @@ func TestCutoverPreservesIDsAndReferences(t *testing.T) {
 		}
 		require.NotEmpty(t, r.before.IDs["user"], "the corpus holds no user")
 		requireNoProblems(t, "IDs", idProblems(r.before, r.after))
+		t.Run("system-user", func(t *testing.T) { checkSystemUserRemap(t, c, r) })
 		requireNoProblems(t, "references", refProblems(t, storeDB(r.work), r.steps, r.before, r.after))
 		if c.wrote != nil {
 			for kind, id := range map[string]string{"user": c.wrote.User.ID, "key": c.wrote.APIKey.ID, "run": c.wrote.Scan.OpID} {

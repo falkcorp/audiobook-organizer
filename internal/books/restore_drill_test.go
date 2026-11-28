@@ -490,19 +490,21 @@ func testCutoverSelftest(t *testing.T) {
 	for _, c := range cs {
 		t.Run(c.name, func(t *testing.T) {
 			pristine := copyCorpus(t, c)
+			fake := c // the fake step's view of the cases (selftestQuarantineCases)
+			fake.quarantineCases = selftestQuarantineCases(c.quarantineCases)
 			for _, fc := range fakeCases {
 				if fc.mut == "drop-prefreeze" && c.wrote == nil {
 					continue
 				}
 				t.Run(fc.name, func(t *testing.T) {
 					work := copyCorpus(t, corpus{dir: pristine})
-					step, referenced := moveUsers(t, storeDB(work), fc.mut, c)
+					step, referenced := moveUsers(t, storeDB(work), fc.mut, fake)
 					spec := scanSpec{steps: []cutoverStep{step}, shared: shared, keepRows: true}
 					before, after := scanStore(t, storeDB(pristine), spec), scanStore(t, storeDB(work), spec)
 					steps := []cutoverStep{step}
 					got := map[string][]string{
 						"counts":      countProblems(steps, before, after),
-						"quarantine":  quarantineProblems(steps, c.quarantineCases, after.Quarantine),
+						"quarantine":  quarantineProblems(steps, fake.quarantineCases, after.Quarantine),
 						"ids":         idProblems(before, after),
 						"refs":        refProblems(t, storeDB(work), steps, before, after),
 						"bytes":       byteProblems(before, after),
@@ -527,6 +529,8 @@ func testCutoverSelftest(t *testing.T) {
 	t.Run("residual", testResidualSelftest)
 	t.Run("completion", testCompletionSelftest)
 	t.Run("surviving-cases", testSurvivingCasesSelftest)
+	t.Run("holders", testHoldersSelftest)
+	t.Run("identity-ids", testIdentityIDsSelftest)
 }
 
 // testSurvivingCasesSelftest proves casesSurvivingWrites resolves an overlay
