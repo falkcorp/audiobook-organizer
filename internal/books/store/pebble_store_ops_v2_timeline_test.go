@@ -979,6 +979,7 @@ var opv2OpKeyAllowlist = map[string]string{
 	"internal/books/store/pebble_store_ops_v2.go:opv2OpKey":                                             "read",
 	"internal/books/store/pebble_store_ops_v2_timeline.go:var opv2RawRefusedPrefixes":                   "read", // the raw-key guard's refused families
 	"internal/books/store/keyfamilies.go:var keyFamilies":                                               "read", // the db census registry's family prefix; declares the prefix, never writes a row
+	"scripts/r2corpus/shaped/rows.go:var rowShapes":                                                     "read", // the shaped-corpus generator (build tag r2corpus_shaped) names the family only to choose the free-text field a clone pads; it writes clones into a throwaway corpus store with raw Pebble, never through this store
 	"internal/books/cutover/m4/head.go:const prefixOp2":                                                 "read", // M4's frozen copy of the prefix (F5-16): names the family the tasks cutover imports and deletes in one batch with the run; nothing in m4 stages the timeline index because the cutover retires the whole index family with it
 	"internal/books/store/pebble_store_ops_v2_timeline.go:(*PebbleStore).commitOpV2Row":                 "stage",
 	"internal/books/store/pebble_store_ops_v2.go:(*PebbleStore).updateOperationV2Status":                "stage", // body of UpdateOperationV2Status and UpdateOperationV2StatusIf
