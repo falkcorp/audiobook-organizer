@@ -37,10 +37,19 @@ import (
 	"github.com/falkcorp/mediacore/rbac"
 )
 
-// permRead is the permission the read routes declare (05-rbac §7.1). The
-// manage routes declare integrations.ManagePerm, the Registry's own constant;
-// manage implies read in the catalog.
+// permRead is the permission the adapters list declares (05-rbac §7.1), the one
+// read route that stays on read. The manage routes declare
+// integrations.ManagePerm, the Registry's own constant; manage implies read in
+// the catalog.
 const permRead rbac.Permission = "core:integrations.read"
+
+// permSettingsManage is the second scope every instance route asks for. HEAD's
+// integrations.manage atom maps to core:integrations.manage and
+// books:integrations.manage only, and at HEAD such a principal never reached
+// instance CRUD or settings (PUT /config needs settings.manage). The
+// settings.manage atom maps to both core scopes (internal/books/atoms.go), so
+// its holder passes.
+const permSettingsManage rbac.Permission = "core:settings.manage"
 
 // maxBody bounds a body: an instance's settings are a handful of fields, and
 // a secret is capped at maxSecretBytes by validation, so a request has no
@@ -71,6 +80,11 @@ func Register(g *httpapi.Group, reg *integrations.Registry, holds HoldReleaser, 
 	tags := []string{"integrations"}
 	read := rbac.Need(permRead)
 	manage := rbac.Need(integrations.ManagePerm)
+	// instance is every instance route's requirement, for every kind: both
+	// scopes, so the reach is HEAD's settings.manage atom and not the wider
+	// core:integrations.manage alone. The health read asks manage alone, and
+	// the adapters list and the two test routes are unchanged.
+	instance := rbac.AllOf(integrations.ManagePerm, permSettingsManage)
 
 	httpapi.Handle(g, httpapi.Route{
 		Method: http.MethodGet, Path: "/integrations/adapters", Name: "listIntegrationAdapters", Perm: read, Tags: tags,
@@ -78,22 +92,22 @@ func Register(g *httpapi.Group, reg *integrations.Registry, holds HoldReleaser, 
 		Doc:     "Optional ?kind= narrows the list to one kind. The schema marks secret fields x-mediacore-secret.",
 	}, a.listAdapters)
 	httpapi.Handle(g, httpapi.Route{
-		Method: http.MethodGet, Path: "/integrations/{kind}/instances", Name: "listIntegrationInstances", Perm: read, Tags: tags,
+		Method: http.MethodGet, Path: "/integrations/{kind}/instances", Name: "listIntegrationInstances", Perm: instance, Tags: tags,
 		Summary: "List a kind's instances",
 		Doc:     "Secret fields are never returned; secrets_set says which hold a value.",
 	}, a.listInstances)
 	httpapi.Handle(g, httpapi.Route{
-		Method: http.MethodPost, Path: "/integrations/{kind}/instances", Name: "createIntegrationInstance", Perm: manage, Tags: tags,
+		Method: http.MethodPost, Path: "/integrations/{kind}/instances", Name: "createIntegrationInstance", Perm: instance, Tags: tags,
 		MaxBody: maxBody, Summary: "Create an instance",
 		Doc: "Secret values go in secrets and are write-only. A body naming an existing instance is 409.",
 	}, a.createInstance)
 	httpapi.Handle(g, httpapi.Route{
-		Method: http.MethodGet, Path: "/integrations/{kind}/instances/{id}", Name: "getIntegrationInstance", Perm: read, Tags: tags,
+		Method: http.MethodGet, Path: "/integrations/{kind}/instances/{id}", Name: "getIntegrationInstance", Perm: instance, Tags: tags,
 		Summary: "Read an instance",
 	}, a.getInstance)
-	httpapi.Handle(g, updateRoute(manage, tags), a.updateInstance)
+	httpapi.Handle(g, updateRoute(instance, tags), a.updateInstance)
 	httpapi.Handle(g, httpapi.Route{
-		Method: http.MethodDelete, Path: "/integrations/{kind}/instances/{id}", Name: "deleteIntegrationInstance", Perm: manage, Tags: tags,
+		Method: http.MethodDelete, Path: "/integrations/{kind}/instances/{id}", Name: "deleteIntegrationInstance", Perm: instance, Tags: tags,
 		Summary: "Delete an instance and its secrets",
 	}, a.deleteInstance)
 	httpapi.Handle(g, httpapi.Route{
@@ -107,11 +121,11 @@ func Register(g *httpapi.Group, reg *integrations.Registry, holds HoldReleaser, 
 		Doc: "A secret the body omits is filled from the stored one only while no destination origin changes.",
 	}, a.testInstance)
 	httpapi.Handle(g, httpapi.Route{
-		Method: http.MethodGet, Path: "/integrations/{kind}/instances/{id}/health", Name: "getIntegrationInstanceHealth", Perm: read, Tags: tags,
+		Method: http.MethodGet, Path: "/integrations/{kind}/instances/{id}/health", Name: "getIntegrationInstanceHealth", Perm: manage, Tags: tags,
 		RateClass: httpapi.RateExpensive, Summary: "Probe an instance and report its health",
 	}, a.getHealth)
 	httpapi.Handle(g, httpapi.Route{
-		Method: http.MethodDelete, Path: "/integrations/{kind}/instances/{id}/hold", Name: "releaseIntegrationInstanceHold", Perm: manage, Tags: tags,
+		Method: http.MethodDelete, Path: "/integrations/{kind}/instances/{id}/hold", Name: "releaseIntegrationInstanceHold", Perm: instance, Tags: tags,
 		Summary: "Release the instance's active hold",
 		Doc:     "204 whether a hold was released or none was active, so the call is idempotent; 409 hold_changed when a different hold took its place between the read and the release (read the health again and retry); 404 for an instance that does not exist. Sends nothing to the remote.",
 	}, a.releaseHold)
@@ -120,9 +134,9 @@ func Register(g *httpapi.Group, reg *integrations.Registry, holds HoldReleaser, 
 // updateRoute is PUT's route. It is strict (not Lenient): an unknown key is a
 // 400, and the read-only keys of a GET answer are members of
 // IntegrationInstanceReplace; it is a function so a test can pin that.
-func updateRoute(manage rbac.Requirement, tags []string) httpapi.Route {
+func updateRoute(perm rbac.Requirement, tags []string) httpapi.Route {
 	return httpapi.Route{
-		Method: http.MethodPut, Path: "/integrations/{kind}/instances/{id}", Name: "updateIntegrationInstance", Perm: manage, Tags: tags,
+		Method: http.MethodPut, Path: "/integrations/{kind}/instances/{id}", Name: "updateIntegrationInstance", Perm: perm, Tags: tags,
 		MaxBody: maxBody, Summary: "Replace an instance's editable fields",
 		Doc: "The body carries the stored version and every editable field (name, enabled, priority, local, limits; {} limits inherit), so a GET answer edited and sent back is a valid body: the read-only keys it carries (kind, origin, secrets_set, locked, stored, updated) are accepted and ignored, and any other unknown key is a 400. A secret the body omits keeps its stored value while no destination moves; settings.<field> = null clears it.",
 	}

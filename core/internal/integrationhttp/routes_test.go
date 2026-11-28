@@ -124,15 +124,15 @@ var wantRoutes = []struct {
 	expensive                bool
 }{
 	{http.MethodGet, "/api/core/v1/integrations/adapters", "listIntegrationAdapters", "core:integrations.read", false},
-	{http.MethodGet, "/api/core/v1/integrations/{kind}/instances", "listIntegrationInstances", "core:integrations.read", false},
-	{http.MethodPost, "/api/core/v1/integrations/{kind}/instances", "createIntegrationInstance", "core:integrations.manage", false},
-	{http.MethodGet, "/api/core/v1/integrations/{kind}/instances/{id}", "getIntegrationInstance", "core:integrations.read", false},
-	{http.MethodPut, "/api/core/v1/integrations/{kind}/instances/{id}", "updateIntegrationInstance", "core:integrations.manage", false},
-	{http.MethodDelete, "/api/core/v1/integrations/{kind}/instances/{id}", "deleteIntegrationInstance", "core:integrations.manage", false},
+	{http.MethodGet, "/api/core/v1/integrations/{kind}/instances", "listIntegrationInstances", "all(core:integrations.manage,core:settings.manage)", false},
+	{http.MethodPost, "/api/core/v1/integrations/{kind}/instances", "createIntegrationInstance", "all(core:integrations.manage,core:settings.manage)", false},
+	{http.MethodGet, "/api/core/v1/integrations/{kind}/instances/{id}", "getIntegrationInstance", "all(core:integrations.manage,core:settings.manage)", false},
+	{http.MethodPut, "/api/core/v1/integrations/{kind}/instances/{id}", "updateIntegrationInstance", "all(core:integrations.manage,core:settings.manage)", false},
+	{http.MethodDelete, "/api/core/v1/integrations/{kind}/instances/{id}", "deleteIntegrationInstance", "all(core:integrations.manage,core:settings.manage)", false},
 	{http.MethodPost, "/api/core/v1/integrations/{kind}/test", "testIntegration", "core:integrations.manage", true},
 	{http.MethodPost, "/api/core/v1/integrations/{kind}/instances/{id}/test", "testIntegrationInstance", "core:integrations.manage", true},
-	{http.MethodGet, "/api/core/v1/integrations/{kind}/instances/{id}/health", "getIntegrationInstanceHealth", "core:integrations.read", true},
-	{http.MethodDelete, "/api/core/v1/integrations/{kind}/instances/{id}/hold", "releaseIntegrationInstanceHold", "core:integrations.manage", false},
+	{http.MethodGet, "/api/core/v1/integrations/{kind}/instances/{id}/health", "getIntegrationInstanceHealth", "core:integrations.manage", true},
+	{http.MethodDelete, "/api/core/v1/integrations/{kind}/instances/{id}/hold", "releaseIntegrationInstanceHold", "all(core:integrations.manage,core:settings.manage)", false},
 }
 
 func registered(t *testing.T) *httpapi.Router {

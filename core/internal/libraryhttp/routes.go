@@ -40,6 +40,13 @@ const BasePath = "/api/core/v1/library"
 // scopeBrowse is the route's permission (05-rbac's fixed core:* catalog).
 const scopeBrowse rbac.Permission = "core:library.browse"
 
+// scopeSettings is the browse route's second scope. HEAD's picker is behind
+// settings.manage, an atom that maps to core:library.browse and
+// core:settings.manage among others (internal/books/atoms.go), so browse alone
+// is wider than HEAD's reach. The registered-roots confinement in browse.go is
+// unchanged.
+const scopeSettings rbac.Permission = "core:settings.manage"
+
 // Route is one native route. Path is relative to BasePath ("/browse"). Perm is
 // the route floor; Handler checks it too.
 type Route struct {
@@ -85,7 +92,7 @@ func New(d Deps) (*Server, error) {
 	r := Route{
 		Method: "GET", Path: "/browse", Name: "browseLibrary",
 		Summary: "List the library roots, or the directories under one root path",
-		Perm:    rbac.Need(scopeBrowse),
+		Perm:    rbac.AllOf(scopeBrowse, scopeSettings),
 	}
 	r.Handler = s.guard(r, s.browse)
 	s.routes = []Route{r}
