@@ -101,6 +101,11 @@ func TestLegacyReach_PerKindPredecessorsStayAlive(t *testing.T) {
 			if refusedByRoutePermission(c.path, rec.Code, rec.Body.String()) {
 				t.Errorf("%s %s as %s: %d %s; HEAD admitted it", c.method, c.path, who, rec.Code, credExcerpt(rec))
 			}
+			// A 410 stub is how a route is retired: the holder is past stage 13 and
+			// still got nothing, so it must be named.
+			if rec.Code == http.StatusGone {
+				t.Errorf("%s %s as %s: 410 gone; the route is kept alive for it", c.method, c.path, who)
+			}
 		}
 		for who, key := range c.refuse {
 			n++
