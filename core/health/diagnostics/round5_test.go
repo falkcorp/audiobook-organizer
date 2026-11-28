@@ -37,7 +37,7 @@ func TestDiagnostics_BuildRefusesAMismatchedActor(t *testing.T) {
 			t.Errorf("%s: a refused build left a temp file", name)
 		}
 	}
-	if _, err := e.Build(context.Background(), "run-same", tasks.Actor{UserID: "bruce", AuthMethod: "session"}, diagnostics.ExportParams{ActorID: "bruce"}, nil); err != nil {
+	if _, err := e.Build(context.Background(), "run-same", tasks.Actor{UserID: "bruce", AuthMethod: "session"}, diagnostics.ExportParams{ActorID: "bruce", Perms: []string{"core:admin"}}, nil); err != nil {
 		t.Errorf("the matching actor was refused: %v", err)
 	}
 }

@@ -477,8 +477,17 @@ func (e *Exporter) Build(ctx context.Context, runID string, actor tasks.Actor, p
 	return ExportResult{File: final, Redactions: m.Redactions}, nil
 }
 
+// ErrNoPermsSnapshot is the refusal of a run whose params carry no permission
+// snapshot: nil (none taken) or empty (it names no scope). The diagnostics
+// route stamps PermsOf(principal) on every start, and a starter holds at least
+// core:system.manage, so neither can come from it; a run without one was started
+// some other way, and an unnarrowed bundle for an unknown starter is the one
+// outcome that must not happen. It fails closed for every actor.
+var ErrNoPermsSnapshot = errors.New("diagnostics: the run carries no permission snapshot of its start request")
+
 // viewer is the run's viewer: the actor's permissions as ViewerFor resolves
-// them now, narrowed to p.Perms when the request carried a snapshot.
+// them now, narrowed to p.Perms. A run with no snapshot (nil or empty) is
+// refused with ErrNoPermsSnapshot before ViewerFor is asked.
 //
 // p.Perms can only narrow. It is a task parameter, and a task's params are
 // whatever the start request supplied, so a snapshot is never trusted to grant:
@@ -488,14 +497,14 @@ func (e *Exporter) Build(ctx context.Context, runID string, actor tasks.Actor, p
 // An actor ViewerFor cannot resolve (deleted since the request) fails the run
 // closed.
 func (e *Exporter) viewer(ctx context.Context, actor tasks.Actor, p ExportParams) (Viewer, error) {
+	if len(p.Perms) == 0 {
+		return Viewer{}, ErrNoPermsSnapshot
+	}
 	v, err := e.cfg.ViewerFor(ctx, actor)
 	if err != nil {
 		return Viewer{}, fmt.Errorf("diagnostics: resolve viewer: %w", err)
 	}
 	v.ActorID = p.ActorID
-	if p.Perms == nil {
-		return v, nil
-	}
 	snap := ViewerOf(p.ActorID, p.Perms)
 	now := v.Can
 	v.Can = func(perm rbac.Permission) bool { return now != nil && now(perm) && snap.Can(perm) }

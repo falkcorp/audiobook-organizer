@@ -146,22 +146,12 @@ func TestDiagnostics_ExportUsesRequestTimePerms(t *testing.T) {
 		t.Errorf("omitted = %v", m.Omitted)
 	}
 
-	// An empty snapshot is not "no snapshot": it grants nothing.
-	res, err = f.build(e, "run-empty", diagnostics.ExportParams{ActorID: "bruce", Perms: []string{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if files := f.zipFiles(res.File); files["core.build/build.json"] != nil || files["batcave.vault/d.json"] != nil {
-		t.Errorf("an empty permission snapshot still produced sections: %v", names(files))
-	}
-
-	// No snapshot at all: the actor's permissions as ViewerFor resolves them.
-	res, err = f.build(e, "run-nosnap", diagnostics.ExportParams{ActorID: "bruce"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if f.zipFiles(res.File)["batcave.vault/d.json"] == nil {
-		t.Error("params without a snapshot should fall back to ViewerFor")
+	// An empty snapshot and no snapshot are refused, not read as "grants
+	// nothing" or "unnarrowed" (snapshot_required_test.go has the cells).
+	for name, perms := range map[string][]string{"run-empty": {}, "run-nosnap": nil} {
+		if _, err := e.Build(context.Background(), name, tasks.Actor{UserID: "bruce", AuthMethod: "session"}, diagnostics.ExportParams{ActorID: "bruce", Perms: perms}, nil); !errors.Is(err, diagnostics.ErrNoPermsSnapshot) {
+			t.Errorf("%s: err = %v, want ErrNoPermsSnapshot", name, err)
+		}
 	}
 
 	// The snapshot survives the task store's JSON, empty and nil kept apart.
@@ -413,7 +403,7 @@ func TestDiagnostics_MismatchedActorRefused(t *testing.T) {
 	if _, serr := f.root.Stat("run-mismatch.zip"); serr == nil {
 		t.Error("a refused run wrote a bundle")
 	}
-	if err := run("run-match", tasks.Actor{UserID: "bruce", AuthMethod: "session"}, diagnostics.ExportParams{ActorID: "bruce"}); err != nil {
+	if err := run("run-match", tasks.Actor{UserID: "bruce", AuthMethod: "session"}, diagnostics.ExportParams{ActorID: "bruce", Perms: []string{"core:admin"}}); err != nil {
 		t.Errorf("the stamped actor was refused: %v", err)
 	}
 	for name, stamped := range map[string]tasks.Actor{"run-system": {System: "core"}, "run-blank": {}} {

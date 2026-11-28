@@ -250,7 +250,7 @@ func (r *hhRig) bundleFor(id, actor string) {
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	res, err := e.Build(context.Background(), id, tasks.Actor{UserID: actor, AuthMethod: "session"}, diagnostics.ExportParams{ActorID: actor}, nil)
+	res, err := e.Build(context.Background(), id, tasks.Actor{UserID: actor, AuthMethod: "session"}, diagnostics.ExportParams{ActorID: actor, Perms: []string{"core:admin"}}, nil)
 	if err != nil {
 		r.t.Fatal(err)
 	}

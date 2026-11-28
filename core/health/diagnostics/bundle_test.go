@@ -168,12 +168,25 @@ func assertNoneOf(t *testing.T, files map[string][]byte, secrets ...string) {
 var manage = rbac.Need("core:system.manage")
 
 func (f *fixture) build(e *diagnostics.Exporter, run string, p diagnostics.ExportParams) (diagnostics.ExportResult, error) {
+	p = withSnapshot(p)
 	return f.buildAs(e, run, tasks.Actor{UserID: p.ActorID, AuthMethod: "session"}, p)
+}
+
+// withSnapshot gives a run that names no snapshot the widest one, core:admin,
+// which narrows nothing: the run then holds what ViewerFor resolves. A run with
+// no snapshot is refused (ErrNoPermsSnapshot), so a test about anything else
+// states one; the refusal's own cells build their params without this.
+func withSnapshot(p diagnostics.ExportParams) diagnostics.ExportParams {
+	if len(p.Perms) == 0 {
+		p.Perms = []string{"core:admin"}
+	}
+	return p
 }
 
 // buildAs builds a bundle for the run's stamped actor, the way Export passes
 // rc.Actor(): ViewerFor sees the actor's method as well as the person.
 func (f *fixture) buildAs(e *diagnostics.Exporter, run string, actor tasks.Actor, p diagnostics.ExportParams) (diagnostics.ExportResult, error) {
+	p = withSnapshot(p)
 	return e.Build(context.Background(), run, actor, p, nil)
 }
 
@@ -364,7 +377,7 @@ func TestDiagnostics_SectionErrorAndPanicGivePartialBundle(t *testing.T) {
 	}
 	e := f.exporter(viewerOf("core:system.manage"), diagnostics.CoreSources{}, bad)
 	var seen [][2]int
-	res, err := e.Build(context.Background(), "run-partial", tasks.Actor{UserID: "bruce", AuthMethod: "session"}, diagnostics.ExportParams{ActorID: "bruce"}, func(done, total int) { seen = append(seen, [2]int{done, total}) })
+	res, err := e.Build(context.Background(), "run-partial", tasks.Actor{UserID: "bruce", AuthMethod: "session"}, diagnostics.ExportParams{ActorID: "bruce", Perms: []string{"core:admin"}}, func(done, total int) { seen = append(seen, [2]int{done, total}) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -592,7 +605,7 @@ func TestDiagnostics_FileSizeCapAndTextOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := e.Build(context.Background(), "run-caps", tasks.Actor{UserID: "bruce", AuthMethod: "session"}, diagnostics.ExportParams{ActorID: "bruce"}, nil)
+	res, err := e.Build(context.Background(), "run-caps", tasks.Actor{UserID: "bruce", AuthMethod: "session"}, diagnostics.ExportParams{ActorID: "bruce", Perms: []string{"core:admin"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -625,7 +638,7 @@ func TestDiagnostics_CancelRemovesPartialFile(t *testing.T) {
 		return ctx.Err()
 	}}}
 	e := f.exporter(viewerOf("core:system.manage"), diagnostics.CoreSources{}, c)
-	if _, err := e.Build(ctx, "run-cancel", tasks.Actor{UserID: "bruce", AuthMethod: "session"}, diagnostics.ExportParams{ActorID: "bruce"}, nil); !errors.Is(err, context.Canceled) {
+	if _, err := e.Build(ctx, "run-cancel", tasks.Actor{UserID: "bruce", AuthMethod: "session"}, diagnostics.ExportParams{ActorID: "bruce", Perms: []string{"core:admin"}}, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Build = %v, want context.Canceled", err)
 	}
 	ents, _ := os.ReadDir(f.dir)

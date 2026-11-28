@@ -171,8 +171,8 @@ func ViewerOf(actorID string, perms []string) Viewer {
 }
 
 // PermsOf lists the concrete permissions c holds, for ExportParams.Perms. It
-// never returns nil, so a run started with no permissions at all is told apart
-// from a run started without a snapshot.
+// never returns nil, so the params encode a list rather than null. A run whose
+// snapshot is nil or empty is refused (ErrNoPermsSnapshot) either way.
 func PermsOf(c rbac.Checker) []string {
 	out := []string{}
 	if c == nil {

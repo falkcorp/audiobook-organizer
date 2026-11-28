@@ -33,14 +33,14 @@ type ExportParams struct {
 	ActorID string `json:"actor_id"`
 	// Perms are the actor's concrete permissions as resolved when the request
 	// was made (PermsOf), so the bundle holds what the actor could read then
-	// and not what a later role change leaves them (05-health 5H.3.5). The
-	// start route always sets it, an empty list when the actor holds nothing;
-	// nil means no snapshot was taken. The run always resolves the actor's
+	// and not what a later role change leaves them (05-health 5H.3.5). Only
+	// the start route stamps it, and the kind is OwnerRouteOnly so the generic
+	// start cannot take one from a caller. The run always resolves the actor's
 	// permissions when it starts and a snapshot only NARROWS that set (a
 	// permission is read only if the actor holds it now and the snapshot lists
-	// it), because task params are client-supplied and must never grant.
-	// It is deliberately not omitempty: an empty snapshot must not read back
-	// as none.
+	// it), because task params must never grant. A run whose snapshot is nil
+	// or empty is refused (ErrNoPermsSnapshot): a starter holds at least
+	// core:system.manage, so neither is a snapshot the route could have taken.
 	Perms []string `json:"perms"`
 	// Sections, when not empty, names the sections to write
 	// ("<moduleID>.<name>"); empty means every section the viewer may read. The
@@ -68,6 +68,13 @@ type InterimExport interface {
 	Export(rc *tasks.RC, p ExportParams) (ExportResult, error)
 }
 
+// exportRouteReason is why the kind is started only through the diagnostics
+// route. ExportParams.Perms is a snapshot of the starter's permissions that the
+// run reads as a ceiling, and only the route stamps it (PermsOf over the
+// request's own checker); the generic start would accept whatever the caller
+// wrote in the params.
+const exportRouteReason = "the diagnostics route stamps the starter's permission snapshot server-side; the generic start would take one from the caller"
+
 // ExportTask returns the final definition of core.diagnostics.export over b.
 // The kernel registers it at P6 only when the app supplies a backend. Its
 // fields are 05-tasks 5T.8.2's row: ReadOnly, ResumeDrop, thirty minutes,
@@ -83,7 +90,7 @@ func ExportTask(b InterimExport) tasks.Definition {
 		Title:   "Export diagnostics",
 		Help:    "Writes a redacted diagnostics bundle into a zip, section by section, limited to what the person who asked may read.",
 		Effects: tasks.ReadOnly(),
-		Perms:   tasks.Permissions{Start: rbac.Need("core:system.manage")},
+		Perms:   tasks.Permissions{Start: rbac.Need("core:system.manage"), OwnerRouteOnly: exportRouteReason},
 		Resume:  tasks.ResumeDrop,
 		Timeout: ExportTimeout,
 		Run:     run,
