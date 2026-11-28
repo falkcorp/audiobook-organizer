@@ -26,7 +26,9 @@ import (
 //	             TestRegisteredHarness_R0DriftIsInTheRouteTable. None since F4-08
 //	             re-recorded R0 at main f6698f9bf: the reconcile row (ed8d80f4b) and
 //	             the reset pair's rows (623da76d3) are R0's own answers now.
-//	classKnown   an accepted narrowing, with the ruling that accepted it.
+//	classKnown   an accepted narrowing, with the ruling that accepted it; and the one
+//	             accepted R0-D, flip-A row, the retired rotate stub's 410 (the oracle's
+//	             registeredRetiredRotate), which reaches nothing.
 //	classB10y    refused by the flipped build where R0 and HEAD admit; not accepted. The
 //	             parity assertion for these is in the last commits of the stack (red
 //	             until slice B10y lands).
