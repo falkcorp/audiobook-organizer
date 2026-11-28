@@ -129,10 +129,13 @@ type windowIndexBuildEnv struct {
 	kindEnv
 	Store  windowIndexBuildStore
 	Writer windowIndexBuildWriter
-	// Fence is HEAD's 05-PR3 write fence, checked right before each file's
-	// write: a stopped run's permit is revoked before its context is canceled.
-	// Nil in a native shell, whose writer is the kernel's gated tasks.Writer
-	// and refuses a stopped run's write itself.
+	// Fence is the run's write fence, checked right before each file's write.
+	// HEAD's shell sets HEAD's 05-PR3 fence (a stopped run's permit is revoked
+	// before its context is canceled); the native shell sets nativeFence, core's
+	// (the attempt context's end, refusing with tasks.ErrFenced). The native
+	// writer is also the kernel's gated tasks.Writer, which refuses a stopped
+	// run's write itself; the fence makes the core stop without relying on
+	// that, as the owner's writer builder is not this file's to vouch for.
 	Fence func(ctx context.Context) error
 }
 
