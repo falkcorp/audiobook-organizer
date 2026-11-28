@@ -18,8 +18,10 @@ type Permissions struct {
 	Start rbac.Requirement // required; own-namespace or core scopes only (05-rbac §4 R3 rule)
 
 	// Manage is the standing right over this kind's existing runs, required of
-	// every kind (owner ruling 2026-11-22: HEAD gated every operations control
-	// route behind settings.manage, and a kind states its own equivalent). A
+	// every kind (owner ruling 2026-11-22: HEAD's v1 operations control routes
+	// are gated behind settings.manage, and a kind states its own equivalent;
+	// v3's cancel admits the starter or scan.trigger plus the definition's
+	// permissions, and that arm narrows to this rule at the cutover). A
 	// caller must satisfy Manage AND the operation's own requirement to cancel
 	// or discard a run (Cancel, omitted = Start) or to decide or approve one
 	// (Approve, for decide omitted = Start). Neither the run's own actor nor a

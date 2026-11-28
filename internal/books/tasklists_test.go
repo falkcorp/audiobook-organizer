@@ -345,7 +345,7 @@ func TestF5_EveryKindTakesTheHook(t *testing.T) {
 
 // Every books kind states taskmanage.Requirement as its Perms.Manage (owner
 // ruling 2026-11-22): the eight-scope AllOf of HEAD's settings.manage, which
-// gated every operations control route. A kind added to a list without it is
+// gates the v1 operations control routes. A kind added to a list without it is
 // refused at registration (tasks.Problems), and one that names something
 // narrower or wider shows here.
 func TestF5_EveryBuiltKindStatesTheBooksManage(t *testing.T) {

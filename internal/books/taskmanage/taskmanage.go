@@ -5,8 +5,9 @@
 
 // Package taskmanage is books' one answer to "who may manage a books task
 // run": the tasks.Permissions.Manage every books kind states (owner ruling
-// 2026-11-22). HEAD gated every operations control route behind
-// settings.manage, so a books kind's Manage is that atom's native scopes
+// 2026-11-22). HEAD's v1 operations control routes are gated behind
+// settings.manage (v3's cancel and approve narrow to it at the cutover), so a
+// books kind's Manage is that atom's native scopes
 // (05-rbac §6.1): a caller cancels, discards, decides or approves a books run
 // only while it holds all eight, next to the operation's own requirement.
 //

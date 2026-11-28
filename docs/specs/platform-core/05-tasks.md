@@ -647,8 +647,10 @@ type Permissions struct {
 	// of own-namespace or core scopes. It is ANDed with the operation's own
 	// requirement for cancel and discard (Cancel) and for decide and approve
 	// (Approve; decide with no Approve falls back to Start). It gates no start.
-	// Owner ruling 2026-11-22: HEAD gated every operations control route behind
-	// settings.manage, so a kind states its own equivalent. A core kind states
+	// Owner ruling 2026-11-22: HEAD's v1 operations control routes are gated
+	// behind settings.manage, so a kind states its own equivalent; v3's cancel
+	// (the starter, or scan.trigger plus the definition's permissions) and its
+	// approve (the definition's Approver) narrow to this rule at the cutover. A core kind states
 	// rbac.Need("core:tasks.manage"); a books kind states the eight-scope AllOf
 	// of settings.manage (05-rbac §6.1).
 	Manage rbac.Requirement
@@ -933,8 +935,8 @@ type Client interface {
 	Runs(ctx context.Context, q RunQuery) iter.Seq2[RunView, error]
 	// Cancel, Decide, Pause and Unpause act as the actor the kernel stamps from
 	// ctx, as Start does (below), and apply the native route's permission rule to
-	// that actor (the table below: Cancel = the run's actor or Perms.Cancel;
-	// Decide = Approve/Start + verified method; Pause/Unpause =
+	// that actor (the table below: Cancel = Perms.Manage AND Perms.Cancel;
+	// Decide = Perms.Manage AND Approve/Start + verified method; Pause/Unpause =
 	// core:tasks.manage).
 	Cancel(ctx context.Context, id RunID) error
 	Decide(ctx context.Context, id RunID, d Decision) error // Resume | Finish | Drop
