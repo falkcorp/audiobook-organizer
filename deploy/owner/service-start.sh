@@ -14,7 +14,10 @@
 #   - if it is already active, says so and does nothing (safe to run again);
 #   - otherwise runs the ONE command the deploy user's sudoers drop-in already
 #     grants, `sudo -n /usr/bin/systemctl start <unit>` (no password, no new
-#     sudoers line), and waits up to WAIT_SEC seconds until the unit is active.
+#     sudoers line), and waits until the unit is active. How long comes from the
+#     unit, not from a constant: its TimeoutStartUSec (300 s for the start of this
+#     service, which is Type=notify) plus MARGIN_SEC. `infinity` is read as
+#     FALLBACK_SEC. WAIT_SEC, when set, replaces that wait.
 #     A unit that ends up `failed` ends the wait at once.
 #   --dry-run   look at the state and say what would run; run nothing.
 #
@@ -24,8 +27,12 @@ set -euo pipefail
 
 CONF=/etc/audiobook-organizer/rollback.conf
 SYSTEMCTL=/usr/bin/systemctl
-WAIT_SEC=120
+WAIT_SEC=
+MARGIN_SEC=60
+FALLBACK_SEC=900
+MAX_WAIT_SEC=3600
 POLL_SEC=2
+PROP=TimeoutStartUSec
 
 DRY=0
 for a in "$@"; do
@@ -47,6 +54,33 @@ case "$UNIT" in
   *[!A-Za-z0-9@._-]*|-*|"") fail "$CONF value for unit has a character this script will not pass on" ;;
 esac
 case "$UNIT" in *.service) ;; *) fail "unit '$UNIT' is not a .service unit" ;; esac
+# systemd prints a timespan ("5min", "1min 30s", "250ms"); this gives whole seconds,
+# rounded up, nothing for "infinity", and a non-zero status for anything else.
+span_seconds() {
+  awk -v t="$1" 'BEGIN {
+    if (t == "infinity") exit 0
+    n = split(t, p, " ")
+    if (n == 0) exit 1
+    total = 0
+    for (i = 1; i <= n; i++) {
+      if (!match(p[i], /^[0-9]+(\.[0-9]+)?/)) exit 1
+      num = substr(p[i], 1, RLENGTH) + 0
+      u = substr(p[i], RLENGTH + 1)
+      if (u == "us") f = 0.000001
+      else if (u == "ms") f = 0.001
+      else if (u == "s") f = 1
+      else if (u == "min") f = 60
+      else if (u == "h") f = 3600
+      else if (u == "d") f = 86400
+      else if (u == "w") f = 604800
+      else if (u == "month") f = 2629800
+      else if (u == "y") f = 31557600
+      else exit 1
+      total += num * f
+    }
+    printf "%d\n", (total == int(total)) ? total : int(total) + 1
+  }'
+}
 active_state() { systemctl show -p ActiveState --value "$UNIT" 2>/dev/null || echo unreadable; }
 STATE=$(active_state)
 echo "    $UNIT is $STATE"
@@ -57,8 +91,20 @@ if [ "$STATE" = "active" ]; then
   echo "    already active: nothing to do"
   exit 0
 fi
+raw=$(systemctl show -p "$PROP" --value "$UNIT" 2>/dev/null) || fail "cannot read $PROP of $UNIT; nothing was changed"
+LIMIT=$(span_seconds "$raw") || fail "cannot read $PROP '$raw' of $UNIT; nothing was changed"
+if [ -z "$LIMIT" ]; then
+  LIMIT=$FALLBACK_SEC
+  HOW="$PROP is infinity, so $FALLBACK_SEC s"
+else
+  HOW="$PROP $raw"
+fi
+if [ -z "$WAIT_SEC" ]; then
+  WAIT_SEC=$((LIMIT + MARGIN_SEC))
+  [ "$WAIT_SEC" -le "$MAX_WAIT_SEC" ] || WAIT_SEC=$MAX_WAIT_SEC
+fi
 if [ "$DRY" -eq 1 ]; then
-  say "dry run only: would run: sudo -n $SYSTEMCTL start $UNIT and wait for active   (nothing was run)"
+  say "dry run only: would run: sudo -n $SYSTEMCTL start $UNIT ($HOW) and wait up to $WAIT_SEC s for active   (nothing was run)"
   exit 0
 fi
 sudo -n "$SYSTEMCTL" start "$UNIT" || fail "systemctl start exited non-zero; $UNIT is now $(active_state)"

@@ -933,7 +933,9 @@ line): `make service-stop` and `make service-start`
 (`scripts/service_control_offhost.py`), and the owner's
 `deploy/owner/service-stop.sh` and `service-start.sh`. Each looks at the unit's
 state first (already there: nothing to do), runs that one command, and waits until
-the unit is `inactive` (stop) or `active` (start; `failed` ends the wait). Both take
+the unit is `inactive` (stop) or `active` (start; `failed` ends the wait), for as long as
+the unit's own `TimeoutStopUSec` or `TimeoutStartUSec` plus 60 s (read from systemd, not a
+fixed number). Both take
 a dry run (`DRY_RUN=1`, `--dry-run`). R2 runbook, Step 0.
 
 - `cutover-blockers-list` runs `storage cutover-blockers list --db <db> --out

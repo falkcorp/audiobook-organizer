@@ -17,10 +17,13 @@
 # again: every step checks before it acts, and the installer is idempotent.
 #
 # Before the install it saves what P6 replaces, once, in ~/aorg-owner/p6-before/
-# (mode 0700): the sha256 of the installed rollback_helper.py, a copy of
-# rollback.conf, and the text of `sudo -n -l`. r2-p6-undo.sh puts the previous
-# bundle back and refuses unless its checkout is the one whose helper has that
-# hash. A rerun keeps the saved copy; it never overwrites it with the P6 state.
+# (mode 0700): the sha256 of EVERY file in the helper directory (the helper, the
+# stubs and the unit template), a copy of rollback.conf, and the text of
+# `sudo -n -l`. r2-p6-undo.sh puts the previous bundle back and refuses unless
+# each of its checkout's files has the saved hash. A rerun keeps the saved copy;
+# it never overwrites it with the P6 state. It asks for the sudo password before
+# saving, because `sudo -n -l` prints nothing without it, and it refuses to
+# install when the listing it saved has no restore-offline line.
 #
 #   --dry-run   do everything except the sudo install (the installer's own
 #               dry run); this is what the agents run before handing it over.
@@ -103,7 +106,7 @@ if [ "$DRY" -eq 1 ]; then
   if [ -e "$SAVED/complete" ]; then
     echo "    the pre-P6 state is already saved in $SAVED; a real run keeps it"
   else
-    echo "    a real run saves the pre-P6 state in $SAVED first (helper hash, rollback.conf, sudo -l)"
+    echo "    a real run saves the pre-P6 state in $SAVED first (a hash of every file in $LIBDIR, rollback.conf, sudo -l)"
   fi
   say "dry run only: nothing was installed"
   exit 0
@@ -116,19 +119,32 @@ if [ -e "$SAVED/complete" ]; then
   echo "    already saved by an earlier run: kept"
 else
   [ ! -e "$SAVED" ] && [ ! -L "$SAVED" ] || fail "$SAVED exists but is not a complete save; look at it, move it away, and run this again"
+  # `sudo -n -l` prints nothing until sudo has your password, so ask now.
+  sudo -v || fail "sudo did not accept your password; nothing was saved or installed"
   TMPSAVE=$(mktemp -d "$SAVED.tmp.XXXXXX")
+  # A hash of every file in the helper directory: what the undo checks its checkout
+  # against. The helper alone is not enough (the unit template can differ between
+  # commits whose helper is byte-identical).
   if [ -r "$LIBDIR/rollback_helper.py" ]; then
-    sha256sum -- "$LIBDIR/rollback_helper.py" | cut -d' ' -f1 > "$TMPSAVE/helper.sha256"
+    find "$LIBDIR" -maxdepth 1 -mindepth 1 -type f -print | LC_ALL=C sort | while IFS= read -r f; do
+      h=$(sha256sum -- "$f" | cut -d' ' -f1)
+      [ -n "$h" ] || exit 1
+      case "${f##*/}" in *[[:space:]]*) exit 1 ;; esac
+      printf '%s  %s\n' "$h" "${f##*/}"
+    done > "$TMPSAVE/libdir.sha256" || { rm -rf "$TMPSAVE"; fail "could not hash the files in $LIBDIR"; }
   else
-    echo absent > "$TMPSAVE/helper.sha256"
+    echo absent > "$TMPSAVE/libdir.sha256"
   fi
-  [ -s "$TMPSAVE/helper.sha256" ] || fail "could not hash the installed helper"
+  [ -s "$TMPSAVE/libdir.sha256" ] || { rm -rf "$TMPSAVE"; fail "could not hash the files in $LIBDIR"; }
   install -m 600 -- "$CONF" "$TMPSAVE/rollback.conf"
   (sudo -n -l 2>/dev/null || true) > "$TMPSAVE/sudo-l.txt"
-  chmod 600 "$TMPSAVE/helper.sha256" "$TMPSAVE/sudo-l.txt"
+  # The undo compares its result with this listing; an empty or partial one proves nothing.
+  grep -q "/usr/local/libexec/audiobook-organizer/rollback/restore-offline" "$TMPSAVE/sudo-l.txt" \
+    || { rm -rf "$TMPSAVE"; fail "'sudo -n -l' printed no restore-offline line, so the listing to save is empty or incomplete; nothing was saved or installed"; }
+  chmod 600 "$TMPSAVE/libdir.sha256" "$TMPSAVE/sudo-l.txt"
   touch "$TMPSAVE/complete"
   mv -- "$TMPSAVE" "$SAVED"
-  echo "    saved: helper sha256 $(cat "$SAVED/helper.sha256"), rollback.conf, sudo -l"
+  echo "    saved: $(grep -c . "$SAVED/libdir.sha256") file hashes, rollback.conf, sudo -l"
 fi
 
 # 5. The install (sudo), then proof it took.

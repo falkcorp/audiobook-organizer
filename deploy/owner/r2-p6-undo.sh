@@ -29,11 +29,14 @@
 # explicitly (`HOME=<state_dir> ABK_STATE_DIR=<state_dir>`).
 #
 # What it checks, so a wrong PIN cannot pass for the right one: r2-p6-reinstall.sh
-# saved the pre-P6 state in ~/aorg-owner/p6-before/ (the sha256 of the installed
-# rollback_helper.py, rollback.conf, sudo -l). This script refuses, before any sudo and
-# under --dry-run too, unless the helper in the PIN checkout hashes to the saved
-# value. After the install it diffs rollback.conf against the saved copy and fails on
-# any difference, and it fails when `sudo -n -l` prints nothing or no restore-offline
+# saved the pre-P6 state in ~/aorg-owner/p6-before/ (a sha256 of EVERY file in the
+# helper directory, rollback.conf, sudo -l). This script refuses, before any sudo and
+# under --dry-run too, unless every one of those files has the same hash in the PIN
+# checkout (the helper and the stubs from deploy/rollback-helpers/, the unit template
+# from deploy/): the helper alone is not enough, because commits with a byte-identical
+# helper carry different unit templates. After the install it diffs rollback.conf
+# against the saved copy and the `sudo -n -l` listing against the saved one, and fails
+# on any difference; it also fails when `sudo -n -l` prints nothing or no restore-offline
 # line (an empty listing proves nothing). On success the save is renamed to
 # p6-before.undone-<UTC stamp>, so a second P6 saves a fresh one.
 #
@@ -49,6 +52,7 @@ SRC="$HOME/aorg-owner/src"
 SAVED="$HOME/aorg-owner/p6-before"
 CONF=/etc/audiobook-organizer/rollback.conf
 UNIT_NAME=audiobook-organizer.service
+TEMPLATE=audiobook-organizer.service   # the unit template the bundle installs, from deploy/
 REPO=https://github.com/falkcorp/audiobook-organizer.git
 STUBS=(export-keyring export-install-secrets cutover-blockers-list cutover-blockers-apply)
 
@@ -77,14 +81,32 @@ git -C "$SRC" checkout -q --detach "$PIN"
 [ "$(git -C "$SRC" rev-parse HEAD)" = "$(git -C "$SRC" rev-parse "$PIN^{commit}")" ] || fail "checkout is not at $PIN"
 [ -z "$(git -C "$SRC" status --porcelain --untracked-files=no)" ] || fail "$SRC has local changes; it must match $PIN exactly"
 echo "    $SRC is at $(git -C "$SRC" rev-parse --short HEAD)"
-# The checkout must be the commit whose bundle P6 replaced: its helper must hash to
-# the value r2-p6-reinstall.sh saved before it installed anything.
+# The checkout must be the commit whose bundle P6 replaced: every file r2-p6-reinstall.sh
+# hashed in the helper directory before it installed anything must hash the same here.
 [ -e "$SAVED/complete" ] || fail "no saved pre-P6 state in $SAVED: r2-p6-reinstall.sh saves it before its install, so there is nothing here to put back"
-WANT_SHA=$(cat "$SAVED/helper.sha256")
-[ "$WANT_SHA" != "absent" ] || fail "no rollback helper was installed before P6 (the saved hash is 'absent'), so there is no previous bundle to put back"
-GOT_SHA=$(sha256sum -- "$SRC/deploy/rollback-helpers/rollback_helper.py" | cut -d' ' -f1)
-[ "$GOT_SHA" = "$WANT_SHA" ] || fail "the helper in $PIN (sha256 $GOT_SHA) is not the one installed before P6 (sha256 $WANT_SHA). PIN must be the commit whose bundle was installed when P6 ran. Nothing was changed."
-echo "    ok: the helper in this checkout is the one P6 replaced (sha256 $WANT_SHA)"
+[ "$(cat "$SAVED/libdir.sha256")" != "absent" ] || fail "no rollback helper was installed before P6 (the saved hash list is 'absent'), so there is no previous bundle to put back"
+grep -q '  rollback_helper\.py$' "$SAVED/libdir.sha256" || fail "$SAVED/libdir.sha256 has no rollback_helper.py line; it is not a save this script can use"
+grep -q "/usr/local/libexec/audiobook-organizer/rollback/restore-offline" "$SAVED/sudo-l.txt" \
+  || fail "$SAVED/sudo-l.txt has no restore-offline line, so the saved listing is empty or incomplete and the check after the undo would prove nothing"
+mismatch=0
+while read -r want name; do
+  case "$name" in
+    "" | */* | .*) fail "$SAVED/libdir.sha256 has a name this script will not use: '$name'" ;;
+    "$TEMPLATE") rel="deploy/$name" ;;
+    *) rel="deploy/rollback-helpers/$name" ;;
+  esac
+  if [ ! -f "$SRC/$rel" ] || [ -L "$SRC/$rel" ]; then
+    echo "    NOT IN $PIN: $rel (installed before P6 as $name)"; mismatch=1; continue
+  fi
+  got=$(sha256sum -- "$SRC/$rel" | cut -d' ' -f1)
+  if [ "$got" = "$want" ]; then
+    echo "    ok: $name"
+  else
+    echo "    DIFFERS: $name ($rel at $PIN has sha256 $got; the one installed before P6 had $want)"; mismatch=1
+  fi
+done < "$SAVED/libdir.sha256"
+[ "$mismatch" -eq 0 ] || fail "the files in $PIN are not the bundle installed before P6 (see above). PIN must be the commit whose bundle was installed when P6 ran. Nothing was changed."
+echo "    ok: every file in this checkout's bundle is the one P6 replaced"
 
 # 2. The host's values, read from the installed rollback.conf (the P6 one).
 say "2/5 values from $CONF"
@@ -154,6 +176,12 @@ for s in "${STUBS[@]}"; do
     echo "    ok: sudoers no longer grants $s"
   fi
 done
+if [ "$(cat "$SAVED/sudo-l.txt")" = "$grants" ]; then
+  echo "    ok: sudo -n -l lists what it listed before P6"
+else
+  diff -u <(printf '%s\n' "$(cat "$SAVED/sudo-l.txt")") <(printf '%s\n' "$grants") || true
+  echo "    WRONG: the sudo -n -l listing above (the saved one is the - side) differs from the one saved before P6 ($SAVED/sudo-l.txt)"; bad=1
+fi
 if diff -u "$SAVED/rollback.conf" "$CONF"; then
   echo "    ok: rollback.conf is what it was before P6"
 else

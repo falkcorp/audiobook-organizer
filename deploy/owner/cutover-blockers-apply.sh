@@ -134,13 +134,16 @@ echo "    $UNIT is inactive"
 say "3/5 the request"
 # Leftovers of an interrupted placement (a temp name that may still be a second
 # link to the request, which the helper refuses).
-STALE=$(find "$EXPORT_DIR" -maxdepth 1 -name '.request.*' -type f -user "$(id -u)" -print)
-if [ -n "$STALE" ]; then
-  if [ "$DRY" -eq 1 ]; then
+# find deletes them itself, so no name is ever split or re-read from text.
+if [ "$DRY" -eq 1 ]; then
+  STALE=$(find "$EXPORT_DIR" -maxdepth 1 -name '.request.*' -type f -user "$(id -u)" -print)
+  if [ -n "$STALE" ]; then
     echo "    a real run would remove these leftovers of an interrupted run:"; printf '      %s\n' "$STALE"
-  else
-    echo "    removing leftovers of an interrupted run:"; printf '      %s\n' "$STALE"
-    while IFS= read -r f; do rm -f -- "$f"; done <<<"$STALE"
+  fi
+else
+  GONE=$(find "$EXPORT_DIR" -maxdepth 1 -name '.request.*' -type f -user "$(id -u)" -print -delete)
+  if [ -n "$GONE" ]; then
+    echo "    removed leftovers of an interrupted run:"; printf '      %s\n' "$GONE"
   fi
 fi
 PLACED_INO=
