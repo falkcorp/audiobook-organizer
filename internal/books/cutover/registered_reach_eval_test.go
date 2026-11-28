@@ -38,7 +38,10 @@ import (
 // for the same route and principal (internal/books/rbacreach/verdicts.json).
 //
 // A cell where the flip admits and R0 refused is a widening and fails the test
-// with no way to list it. A cell where the flip refuses and R0 admitted is a
+// with no way to list it, with one exception: a retired stub that answers 410 Gone
+// to every caller (registeredRetiredRotate). Its letter A is the stub's 410, not
+// reach: nothing behind it runs. checkDiffs refuses a table row that lists any
+// other R0-D, flip-A cell. A cell where the flip refuses and R0 admitted is a
 // narrowing: it must be on a named row of registeredNarrowings with the exact
 // number of cells the row claims, so a change in either direction fails.
 //
@@ -701,6 +704,13 @@ func (h *Registered) checkDiffs(t *testing.T, diffs []oracleDiff, tables []diffT
 		if len(cells) != tb.want || len(twin) != tb.wantTwin {
 			t.Errorf("table %q expands to %d cells and %d core-key twin cells, claims %d and %d", tb.name, len(cells), len(twin), tb.want, tb.wantTwin)
 		}
+		for _, row := range tb.rows {
+			// A widening cannot be listed. The one R0-D, flip-A row a table may
+			// hold is a retired stub's 410 Gone, which reaches nothing.
+			if row.r0 == 'D' && row.flip == 'A' && row.status != http.StatusGone {
+				t.Errorf("table %q lists a widening (R0 D, flip A with %d) for %v: only a retired stub's 410 may be listed", tb.name, row.status, row.routes)
+			}
+		}
 		for _, m := range []map[string]diffRow{cells, twin} {
 			for k, row := range m {
 				if _, dup := expect[k]; dup {
@@ -839,7 +849,7 @@ var (
 	}
 )
 
-// registeredAuthOffTightening: the 12 cells of the auth-disabled principal that HEAD
+// registeredAuthOffTightening: the 10 cells of the auth-disabled principal that HEAD
 // admitted and the flip refuses on purpose. Ruled by the coordinator (2026-11-22): these
 // are RECORDED TIGHTENINGS, not defects. 05-rbac.md section 4.11, "Auth-off tightenings
 // (SEC2-21, SEC5-8)" (a): every Guards.Interactive route refuses the auth-disabled
@@ -852,14 +862,19 @@ var (
 // credential, key, session, audit and backup routes only; the user-management, import-path,
 // tool-install, update-apply and plugin-settings routes below are Interactive by the
 // manifest and covered by (a)'s "every Guards.Interactive route", but not by the note's words.
+//
+// Two cells left the table at the flip (F4-08 r13): POST /api/v1/auth/temp-tokens is
+// deleted (registeredDeletedAtFlip), so no boot judges it; and POST
+// /api/v1/auth/api-keys/:id/rotate answers the auth-disabled principal 410 as HEAD
+// did, now that the credential guard in front of the retired stub is gone.
 var registeredAuthOffTightening = diffTable{
 	name: "auth-off tightening: Guards.Interactive refuses the auth-disabled principal (05-rbac 4.11(a), 05-authn 4.11, SEC5-8)",
-	want: 12,
+	want: 10,
 	rows: []diffRow{
 		{
-			routes: []string{"POST /api/v1/auth/temp-tokens", "POST /api/v1/backup/restore"},
+			routes: []string{"POST /api/v1/backup/restore"},
 			who:    []string{Authoff}, r0: 'A', flip: 'D', status: 403, code: "interactive_required",
-			why: "05-rbac 4.11(a), 05-authn 4.11 (SEC5-8): temp-login and backup restore are Interactive; the release note names them (credential, backup routes)",
+			why: "05-rbac 4.11(a), 05-authn 4.11 (SEC5-8): backup restore is Interactive; the release note names it (backup routes)",
 		},
 		{
 			routes: []string{
@@ -870,23 +885,61 @@ var registeredAuthOffTightening = diffTable{
 			who: []string{Authoff}, r0: 'A', flip: 'D', status: 403, code: "interactive_required",
 			why: "05-rbac 4.11(a), 05-authn 4.11 (SEC5-8): Interactive by the manifest; the release note's wording does not name this route family",
 		},
-		{
-			routes: []string{"POST /api/v1/auth/api-keys/:id/rotate"},
-			who:    []string{Authoff}, r0: 'A', flip: 'D', status: 403, code: "FORBIDDEN", handler: true,
-			why: "05-authn 4.11 (SEC5-8), in-handler form: the credential guard's 403 FORBIDDEN (\"API keys cannot change ...\") refuses the auth-disabled principal; HEAD retired the route (410 for every principal) and the SPA never calls it",
-		},
 	},
+}
+
+// registeredRetiredRotate: POST /api/v1/auth/api-keys/:id/rotate, the stub HEAD
+// retired (01-P81k), answers 410 Gone to every caller once the gin credential guard
+// in front of it is gone (F4-08 B10g; approved reach contract, owner and coordinator
+// rulings 2026-11-22). R0 recorded D for these keys: HEAD's guard refused an API key
+// with 403 before the stub. The flip's letter A is the stub's 410, and nothing is
+// minted. The sessions and the auth-disabled principal got the 410 at R0 too; the
+// fp-worker principals, key:admin:worker and the anonymous caller are refused on the
+// flip as at R0, so they are not differences.
+// 21 recorded keys and their 14 core-native twins: the 35 cells of the contract.
+var registeredRetiredRotate = diffTable{
+	name:     "retired stub: 410 to every caller once the credential guard is gone",
+	want:     21,
+	wantTwin: 14,
+	rows: []diffRow{{
+		routes: []string{"POST /api/v1/auth/api-keys/:id/rotate"},
+		who: []string{
+			"key:admin:view", "key:admin:settings", "key:admin:users", "key:admin:every", "key:admin:empty",
+			"key:editor:view", "key:editor:settings", "key:editor:users", "key:editor:worker", "key:editor:every", "key:editor:empty",
+			"key:viewer:view", "key:viewer:settings", "key:viewer:users", "key:viewer:worker", "key:viewer:every", "key:viewer:empty",
+			"key:custom-all:every", "key:custom-all:empty", "key:custom-subset:outside", "key:custom-subset:empty",
+		},
+		r0: 'D', flip: 'A', status: http.StatusGone,
+		why: "retired stub: 410 to every caller once the credential guard is gone",
+	}},
+}
+
+// registeredDeletedAtFlip are R0's routes the identity flip deletes (F4-08 spec step
+// 3; internal/server routesDeletedAtTheFlip): no pattern matches them and they answer
+// 404 to every principal. Core's POST /api/core/v1/users/{id}/temp-login and POST
+// /api/core/v1/auth/temp-login/consume replace them. No boot judges them, so the
+// verdict sweep does not send them (TestRegisteredHarness_DeletedRoutesAreNotRegistered
+// holds them to 404 instead) and the oracle pins them in registeredUnregistered.
+var registeredDeletedAtFlip = []unregisteredRoute{
+	{"GET /auth/temp-login", http.StatusNotFound, deletedAtFlipWhy},
+	{"POST /api/v1/auth/temp-tokens", http.StatusNotFound, deletedAtFlipWhy},
+}
+
+const deletedAtFlipWhy = "route deleted at the flip, replaced by core's native route (spec step 3)"
+
+// unregisteredRoute is an R0 route no registered pattern matches, with the status the
+// flip answers every principal and why.
+type unregisteredRoute struct {
+	route  string
+	status int
+	why    string
 }
 
 // registeredUnregistered are R0 routes no registered pattern matches, with what
 // the flip answers every principal. Pinned so a change either way shows.
-var registeredUnregistered = []struct {
-	route  string
-	status int
-	why    string
-}{
+var registeredUnregistered = append([]unregisteredRoute{
 	{"GET /", http.StatusOK, "the SPA index: served by the static handler, public, so no route carries a requirement"},
-}
+}, registeredDeletedAtFlip...)
 
 // registeredCanaryNarrowing: the principals whose canary (GET /auth/me) answers
 // differently on the flip. The known difference of the 11-22 ruling.
@@ -900,13 +953,13 @@ var registeredCanaryNarrowing = map[string][2]int{
 
 const (
 	registeredR0Routes     = 574
-	registeredProbed       = 505
+	registeredProbed       = 503 // 505 until the flip deleted GET /auth/temp-login and POST /api/v1/auth/temp-tokens (registeredDeletedAtFlip)
 	registeredDelegated    = 68
 	registeredPrincipals   = 36 // the recorded abk_ keys, sessions and the anonymous caller
 	registeredCoreKeys     = 18 // core-native mck_ twins, held to their imported twin's recording
 	registeredNoCoreTwin   = 10
 	registeredAuthOnCells  = registeredProbed * registeredPrincipals
-	registeredAuthOffCells = 505 // one principal over the probed routes
+	registeredAuthOffCells = registeredProbed // one principal over the probed routes
 )
 
 // The recorded task starts and approvals, as pseudo-routes.
@@ -1037,7 +1090,7 @@ func TestRegisteredReach_Oracle(t *testing.T) {
 			t.Errorf("R0 recorded %d task starts and %d approvals, the oracle pins %d and %d", len(r0.Tasks), len(r0.Approvals), registeredTasks, registeredApprovals)
 		}
 		t.Logf("compared %d cells (%d route cells pinned)", compared, registeredAuthOnCells)
-		tables := []diffTable{registeredFPWorkerNarrowing, registeredRuledNarrowings, registeredBootstrapRefused}
+		tables := []diffTable{registeredFPWorkerNarrowing, registeredRuledNarrowings, registeredBootstrapRefused, registeredRetiredRotate}
 		h.checkDiffs(t, diffs, tables)
 		h.checkR2OnlyLetters(t, r0, false)
 		hc, hcStage13 := h.checkHandlerCells(t, pass, false)

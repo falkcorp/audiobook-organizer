@@ -42,6 +42,11 @@ import (
 //
 // A core-native key (corekey:...) is held to its abk_ twin's verdict: it mismatches
 // exactly where its twin does, and the row lists the twin only.
+//
+// The routes the flip deletes (registeredDeletedAtFlip) are not swept: no pattern
+// matches them, so a 404 would read as the letter A and compare nothing. They are
+// held to "not registered, 404 to every principal" by
+// TestRegisteredHarness_DeletedRoutesAreNotRegistered.
 
 type verdictClass int
 
@@ -134,6 +139,8 @@ var verdictRows = []verdictRow{
 		Why: "ruled (05-rbac 6.2, 4.4 rule 1; 09-abo-on-core 9.2.6; F4-07 golden): books:admin.debug is Sensitive, so an admin's API key, the bootstrap key included, is refused 403 interactive_required on the three debug edit routes; the oracle's registeredRuledNarrowings holds the same cells"},
 	{Method: "POST", Route: "/api/v1/admin/debug/edits/:edit_id/undo", Class: classKnown, Principals: []string{"key:admin:empty", "key:admin:every"},
 		Why: "ruled (05-rbac 6.2, 4.4 rule 1; 09-abo-on-core 9.2.6; F4-07 golden): books:admin.debug is Sensitive, so an admin's API key, the bootstrap key included, is refused 403 interactive_required on the three debug edit routes; the oracle's registeredRuledNarrowings holds the same cells"},
+	{Method: "POST", Route: "/api/v1/auth/api-keys/:id/rotate", Class: classKnown, Principals: registeredRetiredRotate.rows[0].who,
+		Why: "retired stub: 410 to every caller once the credential guard is gone (approved reach contract 11-22; R0's 403 was HEAD's credential guard in front of the 410; nothing is minted); the oracle's registeredRetiredRotate holds the same 35 cells"},
 }
 
 // authOffTightening is a route that R0 recorded as open to the auth-off principal and
@@ -151,7 +158,7 @@ type authOffTightening struct {
 }
 
 // authOffTightenings flattens the oracle's registeredAuthOffTightening table
-// (registered_reach_eval_test.go: the one source of the 12 cells, each row with its
+// (registered_reach_eval_test.go: the one source of the 10 cells, each row with its
 // citation) into the route-and-code pairs the sweep and the exact-refusal test read.
 func authOffTightenings() []authOffTightening {
 	var out []authOffTightening
@@ -222,7 +229,7 @@ func sweepCells(t *testing.T, h *Registered, only func(*Principal) bool, cell fu
 	}
 	for pass := 0; pass < 2; pass++ {
 		for _, r := range routes {
-			if ends(r.Path) != (pass == 1) {
+			if ends(r.Path) != (pass == 1) || deletedAtFlip(r.Method, r.Path) {
 				continue
 			}
 			for _, p := range h.Principals {
@@ -315,6 +322,63 @@ func TestRegisteredHarness_EveryVerdictIsR0sOrNamed(t *testing.T) {
 		h := bootAsRecorded(t, true)
 		check(t, h, func(p *Principal) bool { return p != nil && p.Kind == "authoff" })
 	})
+}
+
+// deletedAtFlip reports whether R0's route is one the flip deletes
+// (registeredDeletedAtFlip).
+func deletedAtFlip(method, route string) bool {
+	return slices.ContainsFunc(registeredDeletedAtFlip, func(d unregisteredRoute) bool {
+		return d.route == method+" "+route
+	})
+}
+
+// TestRegisteredHarness_DeletedRoutesAreNotRegistered holds the routes the sweep
+// skips (registeredDeletedAtFlip) to what the flip does with them: no registered
+// pattern matches them on either boot, and every principal of the boot is answered
+// 404 with no session cookie. A route re-mounted under identity fails here by name,
+// without the oracle's full sweep.
+func TestRegisteredHarness_DeletedRoutesAreNotRegistered(t *testing.T) {
+	if len(registeredDeletedAtFlip) != 2 {
+		t.Fatalf("%d deleted routes listed, want the 2 of spec step 3", len(registeredDeletedAtFlip))
+	}
+	for _, boot := range []struct {
+		name    string
+		authOff bool
+	}{{"auth on", false}, {"auth off", true}} {
+		t.Run(boot.name, func(t *testing.T) {
+			h := bootRegistered(t, registeredConfig{AuthOff: boot.authOff})
+			for _, d := range registeredDeletedAtFlip {
+				method, route, _ := strings.Cut(d.route, " ")
+				path := probePathFor(t, method, route)
+				if ri := h.match(method, strings.SplitN(path, "?", 2)[0]); ri != nil {
+					t.Errorf("%s is registered under identity as %s %s (%s)", d.route, ri.Method, ri.Pattern, d.why)
+					continue
+				}
+				asked := 0
+				for _, p := range h.Principals {
+					if p == nil || (p.Kind == "authoff") != boot.authOff {
+						continue
+					}
+					_, body := recordedRequest(recordedRoute{Method: method, Path: route, ProbePath: path}, p)
+					res, err := h.Do(p, method, path, body)
+					if err != nil {
+						t.Errorf("%s as %s: %v", d.route, p.Name, err)
+						continue
+					}
+					asked++
+					if res.Status != d.status {
+						t.Errorf("%s as %s: %d %s, want %d (%s)", d.route, p.Name, res.Status, res.excerpt(), d.status, d.why)
+					}
+					if ck := res.Header.Values("Set-Cookie"); len(ck) > 0 {
+						t.Errorf("%s as %s: the deleted route set a cookie %v", d.route, p.Name, ck)
+					}
+				}
+				if asked == 0 {
+					t.Errorf("%s: no principal was asked", d.route)
+				}
+			}
+		})
+	}
 }
 
 // TestRegisteredHarness_R0DriftIsInTheRouteTable ties the classDrift rows to the
