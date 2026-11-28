@@ -17,7 +17,7 @@ import (
 	coreconfig "github.com/falkcorp/mediacore/config"
 )
 
-// refuseRetiredOperatorSettings refuses a boot while the host still sets an
+// RefuseRetiredOperatorSettings refuses a boot while the host still sets an
 // operator-layer setting the flip stopped reading (cutover.RefusedOperatorPaths):
 // the old openai path integrations.ai.openai.base_url and any
 // integrations.metadata.<source id>.credentials.<k>, by their canonical env name
@@ -37,7 +37,7 @@ import (
 // env variable or the file and the path, and what to set instead. The deploy
 // pre-flight (scripts/deploy_env_check.py) refuses the same env names before
 // install; it reads no host, so a key of the operator file is caught only here.
-func refuseRetiredOperatorSettings(configFile string, environ []string) error {
+func RefuseRetiredOperatorSettings(configFile string, environ []string) error {
 	type use struct{ what, why string }
 	var uses []use
 	rules := cutover.RefusedOperatorPaths()

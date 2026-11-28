@@ -216,6 +216,103 @@ func TestConfigCheck_ReportsWhatInitConfigRefuses(t *testing.T) {
 	}
 }
 
+// runConfigCheck runs `config check` with the given extra arguments and returns
+// the error and everything it printed.
+func runConfigCheck(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+	rootCmd.SetArgs(append([]string{"config", "check"}, args...))
+	t.Cleanup(func() { rootCmd.SetArgs(nil); rootCmd.SetOut(nil); rootCmd.SetErr(nil) })
+	err := rootCmd.Execute()
+	return out.String() + errString(err), err
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// TestConfigCheck_RefusesWhatTheBootRefuses (round-1 F2 of #5080): core's retired
+// list cannot hold the old openai path or the metadata credentials family, so the
+// books boot refuses them itself (books.RefuseRetiredOperatorSettings). config
+// check ran only core's check and exited 0 on a host the boot would stop, while
+// docs/configuration.md promises it exits non-zero when a name would stop the
+// server. Each cell sets one thing the boot refuses, by every spelling, and wants
+// a non-zero exit, the key named, and no value printed. Mutant: drop the books
+// check from the config-check path.
+func TestConfigCheck_RefusesWhatTheBootRefuses(t *testing.T) {
+	const sentinel = "sentinel-gotham-3d8e.invalid"
+	for _, c := range []struct{ name, env string }{
+		{"the old openai path by env", "ABO_INTEGRATIONS_AI_OPENAI_BASE_URL"},
+		{"the old openai path as a file", "ABO_INTEGRATIONS_AI_OPENAI_BASE_URL_FILE"},
+		{"a metadata credential by env", "ABO_INTEGRATIONS_METADATA_HARDCOVER_CREDENTIALS_API_TOKEN"},
+		{"a metadata credential as a file", "ABO_INTEGRATIONS_METADATA_GOOGLE_BOOKS_CREDENTIALS_API_KEY_FILE"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			isolateInitConfig(t)
+			t.Setenv(c.env, "/srv/"+sentinel)
+			out, err := runConfigCheck(t)
+			if err == nil {
+				t.Fatalf("config check exited 0 on %s\n%s", c.env, out)
+			}
+			if !strings.Contains(out, c.env) {
+				t.Errorf("config check does not name %s:\n%s", c.env, out)
+			}
+			if strings.Contains(out, sentinel) {
+				t.Errorf("config check printed the value:\n%s", out)
+			}
+		})
+	}
+	t.Run("the old openai env names the env spelling of the replacement", func(t *testing.T) {
+		isolateInitConfig(t)
+		t.Setenv("ABO_INTEGRATIONS_AI_OPENAI_BASE_URL", sentinel)
+		out, _ := runConfigCheck(t)
+		if !strings.Contains(out, "ABO_INTEGRATIONS_AI_OPENAI_URL") {
+			t.Errorf("config check does not name the env spelling of the replacement:\n%s", out)
+		}
+	})
+	t.Run("a key of the operator file", func(t *testing.T) {
+		isolateInitConfig(t)
+		file := filepath.Join(t.TempDir(), "gotham.yaml")
+		doc := "integrations:\n  ai:\n    openai:\n      base_url: https://" + sentinel + "\n  metadata:\n    hardcover:\n      credentials:\n        api_token: " + sentinel + "\n"
+		if err := os.WriteFile(file, []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out, err := runConfigCheck(t, "--config", file)
+		if err == nil {
+			t.Fatalf("config check exited 0 on an operator file with retired keys\n%s", out)
+		}
+		for _, key := range []string{"integrations.ai.openai.base_url", "integrations.metadata.hardcover.credentials.api_token"} {
+			if !strings.Contains(out, key) {
+				t.Errorf("config check does not name %s:\n%s", key, out)
+			}
+		}
+		if strings.Contains(out, sentinel) {
+			t.Errorf("config check printed a value:\n%s", out)
+		}
+	})
+	t.Run("core's own report is not hidden behind it", func(t *testing.T) {
+		isolateInitConfig(t)
+		t.Setenv("PLAYLIST_DIR", "/srv/gotham/playlists")
+		t.Setenv("ABO_INTEGRATIONS_AI_OPENAI_BASE_URL", sentinel)
+		out, err := runConfigCheck(t)
+		if err == nil || !strings.Contains(out, "ABO_BOOKS_PLAYLIST_DIR") || !strings.Contains(out, "ABO_INTEGRATIONS_AI_OPENAI_BASE_URL") {
+			t.Errorf("config check = %v; want core's report of PLAYLIST_DIR and the books refusal of the openai name\n%s", err, out)
+		}
+	})
+	t.Run("the settings to use are accepted", func(t *testing.T) {
+		isolateInitConfig(t)
+		t.Setenv("ABO_INTEGRATIONS_AI_OPENAI_URL", "https://"+sentinel)
+		if out, err := runConfigCheck(t); err != nil {
+			t.Fatalf("config check = %v\n%s", err, out)
+		}
+	})
+}
+
 // TestConfigCheck_CleanLayersCreateNothing: with nothing retired set, config
 // check passes and still creates nothing in the working directory.
 func TestConfigCheck_CleanLayersCreateNothing(t *testing.T) {

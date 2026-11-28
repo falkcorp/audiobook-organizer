@@ -6,7 +6,9 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -42,6 +44,24 @@ var configCheckOptions = func() (app.Options, error) {
 	}
 	return books.ConfigCheckOptions(boot), nil
 }
+
+// configCheckRefusal is what the books boot refuses over the operator layers that
+// core's retired list cannot hold (the old openai path and the metadata
+// credentials family, by environment variable, by <NAME>_FILE or by key of the
+// --config file): config check runs the same check, so it is not green on a
+// setting the boot refuses. A var so a test can see it used.
+var configCheckRefusal = func() error {
+	boot, err := rootBootInputs()
+	if err != nil {
+		return err
+	}
+	return books.RefuseRetiredOperatorSettings(boot.ConfigFile, os.Environ())
+}
+
+// errConfigCheckRetiredOperator is config check's own refusal for configCheckRefusal,
+// beside core's count of retired names: the settings themselves are printed
+// (names only, never a value) above it.
+var errConfigCheckRetiredOperator = errors.New("config check: the host sets retired operator settings the service no longer reads, so it would stop at boot")
 
 // addOfflineCommands wraps each entry of app.OfflineCommands as a cobra
 // command under root (06 §6.4.5; MOD2-4, R9-9, COR9-6): core's offline
@@ -92,13 +112,19 @@ func addOfflineCommands(root *cobra.Command, mods func(app.Options) []module.Mod
 				// Help needs no store: it is printed before config would
 				// resolve (and perhaps create) the state directory.
 				opts := app.Options{AppID: books.AppID}
+				var operatorRefusal error
 				if !wantsHelp(own) {
 					var err error
 					if name == configCheckName {
 						// config check reports the retired names a boot would
 						// refuse, so it must not run the config load that refuses
 						// them, and it opens nothing: the operator layers alone.
+						// The books boot refuses a few more (configCheckRefusal);
+						// they are reported beside core's list, not instead of it.
 						opts, err = configCheckOptions()
+						if err == nil {
+							operatorRefusal = configCheckRefusal()
+						}
 					} else if err = initConfig(); err == nil {
 						opts, err = offlineOptions()
 					}
@@ -108,7 +134,14 @@ func addOfflineCommands(root *cobra.Command, mods func(app.Options) []module.Mod
 				}
 				for _, oc := range app.OfflineCommands(opts, mods(opts)...) {
 					if oc.Name == name {
-						return oc.Run(cmd.Context(), own, cmd.OutOrStdout())
+						runErr := oc.Run(cmd.Context(), own, cmd.OutOrStdout())
+						if operatorRefusal != nil {
+							if _, werr := fmt.Fprintln(cmd.OutOrStdout(), operatorRefusal); werr != nil {
+								runErr = errors.Join(runErr, werr)
+							}
+							runErr = errors.Join(runErr, errConfigCheckRetiredOperator)
+						}
+						return runErr
 					}
 				}
 				return fmt.Errorf("%s: not an offline command of this build", name)

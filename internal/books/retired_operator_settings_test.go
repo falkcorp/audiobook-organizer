@@ -300,7 +300,7 @@ func TestRetiredOperatorSettings_ServePathRefuses(t *testing.T) {
 // environments directly: every refusal names the variable or the file path and
 // never a value, even for an unusual value.
 func TestRetiredOperatorSettings_TheMessageNamesKeysOnly(t *testing.T) {
-	err := refuseRetiredOperatorSettings("", []string{
+	err := RefuseRetiredOperatorSettings("", []string{
 		"PATH=/usr/bin",
 		oldOpenAIEnv + "=" + sentinelOld,
 		"ABO_INTEGRATIONS_METADATA_HARDCOVER_CREDENTIALS_API_TOKEN=" + sentinelKey,
@@ -310,7 +310,7 @@ func TestRetiredOperatorSettings_TheMessageNamesKeysOnly(t *testing.T) {
 	if strings.Contains(err.Error(), "GOOGLE_BOOKS") {
 		t.Errorf("an empty env was named: %v", err)
 	}
-	if err := refuseRetiredOperatorSettings("", []string{"ABO_INTEGRATIONS_AI_OPENAI_URL=" + sentinelNew}); err != nil {
+	if err := RefuseRetiredOperatorSettings("", []string{"ABO_INTEGRATIONS_AI_OPENAI_URL=" + sentinelNew}); err != nil {
 		t.Errorf("the new name was refused: %v", err)
 	}
 }

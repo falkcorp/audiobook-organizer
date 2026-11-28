@@ -43,7 +43,7 @@ func OperatorAppConfig(ctx context.Context, mod module.Module, boot BootInputs) 
 	if err := refuseHEADKeyedConfigFile(boot.ConfigFile); err != nil {
 		return config.Config{}, err
 	}
-	if err := refuseRetiredOperatorSettings(boot.ConfigFile, os.Environ()); err != nil {
+	if err := RefuseRetiredOperatorSettings(boot.ConfigFile, os.Environ()); err != nil {
 		return config.Config{}, err
 	}
 	opts := bootOptions(boot)
