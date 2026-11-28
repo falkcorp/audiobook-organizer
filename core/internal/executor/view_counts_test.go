@@ -7,9 +7,11 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/tasks"
 )
 
@@ -88,5 +90,23 @@ func TestVisibleCounts_FollowsTheSnapshotRule(t *testing.T) {
 		if err != nil || total(got) != who.want {
 			t.Errorf("%s counts = %v, %v; want %d runs", who.name, got, err, who.want)
 		}
+	}
+}
+
+// plainRuns is a RunStore with no per-kind census: tasks.RunStore only.
+type plainRuns struct{ tasks.RunStore }
+
+// TestVisibleCounts_RefusesWithoutAKindCensus (R2): a store that does not
+// implement tasks.KindCounter makes the census refuse, never answer the raw
+// total. Killed by falling back to RunStore.Counts.
+func TestVisibleCounts_RefusesWithoutAKindCensus(t *testing.T) {
+	h := reachHarness(t, func(o *Options) {
+		o.NewBatch = o.Stores.Runs.(interface{ NewBatch() *storage.Batch }).NewBatch
+		o.Stores.Runs = plainRuns{o.Stores.Runs}
+	})
+	importRuns(t, h, []tasks.RunRecord{doneRun("cowl-1", "gotham.cowl", tasks.StateSucceeded)})
+	got, err := VisibleCounts(h.x)(viewerCtx())
+	if !errors.Is(err, ErrKindCountsUnsupported) || got != nil {
+		t.Fatalf("census over a store with no per-kind counts = %v, %v; want ErrKindCountsUnsupported", got, err)
 	}
 }

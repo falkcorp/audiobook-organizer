@@ -1921,7 +1921,11 @@ func imported(t *testing.T, s tasks.Stores) (have, total int) {
 // through its transitions, and sums back to Counts.
 func testCountsByKind(t *testing.T, f *fixture) {
 	ctx := t.Context()
-	if got, err := f.Runs.CountsByKind(ctx); err != nil || len(got) != 0 {
+	kc, ok := f.Runs.(tasks.KindCounter)
+	if !ok {
+		t.Skip("Stores.Runs does not implement tasks.KindCounter")
+	}
+	if got, err := kc.CountsByKind(ctx); err != nil || len(got) != 0 {
 		t.Fatalf("CountsByKind of an empty store = %v, %v", got, err)
 	}
 	patrol := rec("patrol-1", kindPatrol, tasks.StateQueued)
@@ -1934,7 +1938,7 @@ func testCountsByKind(t *testing.T, f *fixture) {
 	)
 	check := func(label string, want map[tasks.Kind]map[tasks.RunState]int64) {
 		t.Helper()
-		got, err := f.Runs.CountsByKind(ctx)
+		got, err := kc.CountsByKind(ctx)
 		if err != nil {
 			t.Fatalf("%s: CountsByKind: %v", label, err)
 		}

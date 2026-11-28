@@ -108,6 +108,10 @@ func (e *executor) Log(ctx context.Context, id tasks.RunID, q tasks.PageQuery) i
 	}
 }
 
+// ErrKindCountsUnsupported is VisibleCounts' refusal when the executor's RunStore
+// does not implement tasks.KindCounter.
+var ErrKindCountsUnsupported = errors.New("executor: the run store has no per-kind census (tasks.KindCounter), so the census cannot be limited to the runs the caller may view")
+
 // VisibleCounts returns x's run census as a caller sees it: the runs in each
 // state that the caller may view, so the counts never name a run that Get,
 // Runs and Timeline hide (a View-gated kind's runs, a kind with no usable
@@ -131,7 +135,13 @@ func VisibleCounts(x tasks.Executor) func(ctx context.Context) (map[tasks.RunSta
 
 func (e *executor) visibleCounts(ctx context.Context) (map[tasks.RunState]int64, error) {
 	_, who := e.caller(ctx)
-	byKind, err := e.runs.CountsByKind(ctx)
+	kc, ok := e.runs.(tasks.KindCounter)
+	if !ok {
+		// Fail closed: without a per-kind census the only answer is the raw
+		// total, which counts runs the caller may not view.
+		return nil, ErrKindCountsUnsupported
+	}
+	byKind, err := kc.CountsByKind(ctx)
 	if err != nil {
 		return nil, err
 	}

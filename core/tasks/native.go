@@ -314,10 +314,12 @@ func stageDebounce(ctx context.Context, st *taskstore.Store, b *storage.Batch, d
 	return putValue(st, b, key, merged)
 }
 
-// nativeRuns is NativeStores' RunStore.
+// nativeRuns is NativeStores' RunStore (and its KindCounter).
 type nativeRuns struct {
 	st *taskstore.Store
 }
+
+var _ KindCounter = (*nativeRuns)(nil)
 
 // NewBatch is an indexed batch over the c/tasks/ keyspace, for a build that
 // holds no other handle (WriteRuns' open, a test). It is indexed so that a
@@ -613,8 +615,7 @@ func (r *nativeRuns) Counts(ctx context.Context) (map[RunState]int64, error) {
 	return out, nil
 }
 
-// CountsByKind implements RunStore.CountsByKind from the kind and state
-// indexes.
+// CountsByKind implements KindCounter from the kind and state indexes.
 func (r *nativeRuns) CountsByKind(ctx context.Context) (map[Kind]map[RunState]int64, error) {
 	raw, err := r.st.KindStateCounts(ctx)
 	if err != nil {

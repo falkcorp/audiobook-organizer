@@ -105,12 +105,6 @@ type RunStore interface { //nolint:interfacebloat // spec-mandated SDK interface
 	Unfinished(ctx context.Context) iter.Seq2[RunRecord, error]       // the resume sweep's input
 	List(ctx context.Context, q RunQuery) iter.Seq2[RunRecord, error] // includes terminal history, in RunFilter order
 	Counts(ctx context.Context) (map[RunState]int64, error)           // derived from the state index (5T.6.1)
-	// CountsByKind is Counts split by kind: the runs of each kind in each
-	// state, derived from the kind and state indexes. It exists so a reader
-	// that must count only the runs a caller may view decides visibility once
-	// per kind rather than once per run (F5-18 reach R2). A run created while
-	// it scans may be left out.
-	CountsByKind(ctx context.Context) (map[Kind]map[RunState]int64, error)
 
 	// Per-run pages: transition trail, Preview intents, item outcomes, log.
 	AppendEvent(ctx context.Context, b *storage.Batch, id RunID, seq uint64, e RunEvent) error
@@ -162,6 +156,18 @@ type RunStore interface { //nolint:interfacebloat // spec-mandated SDK interface
 	// Maintenance: commits its own batches (above); a row is deleted only as
 	// read, terminal (an Expect on the row). Called by core.tasks.prune (5T.10).
 	Prune(ctx context.Context, before time.Time, limit int) (deleted int, err error) // terminal runs only, chunked
+}
+
+// KindCounter is an optional capability of a RunStore: Counts split by kind,
+// the runs of each kind in each state, derived from the kind and state
+// indexes. It is its own interface, found by type assertion, so a RunStore
+// outside this module keeps compiling; NativeStores implements it. A reader
+// that must count only the runs a caller may view (the executor's census,
+// F5-18 reach R2) decides visibility once per kind from it, and refuses when
+// the store has none, never falling back to the raw Counts. A run created
+// while it scans may be left out.
+type KindCounter interface {
+	CountsByKind(ctx context.Context) (map[Kind]map[RunState]int64, error)
 }
 
 // Clock is one scheduled kind's durable clock (5T.3.8).
