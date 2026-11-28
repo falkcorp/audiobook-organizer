@@ -927,8 +927,14 @@ take no arguments and are granted with `""`; both read `export_dir`, `bin`, `db`
 helper refuses unless the service unit is `inactive` (`failed`, `activating`, an
 unreadable state and anything else are refused), and refuses while the restore
 unit or an export unit is running. **Neither helper ever stops or starts the
-service.** Stopping it is a separate step the helpers do not provide (R2 runbook,
-Step 0).
+service.** Stopping and starting it are separate, tracked steps that use the
+`systemctl stop|start <unit>` lines the sudoers drop-in already grants (no new
+line): `make service-stop` and `make service-start`
+(`scripts/service_control_offhost.py`), and the owner's
+`deploy/owner/service-stop.sh` and `service-start.sh`. Each looks at the unit's
+state first (already there: nothing to do), runs that one command, and waits until
+the unit is `inactive` (stop) or `active` (start; `failed` ends the wait). Both take
+a dry run (`DRY_RUN=1`, `--dry-run`). R2 runbook, Step 0.
 
 - `cutover-blockers-list` runs `storage cutover-blockers list --db <db> --out
   <scratch>` as the service user in a transient unit
@@ -963,8 +969,20 @@ Step 0).
   `REQUEST-REMOVED aorg-cutover-blockers-request.json`. When it failed, the request
   stays and the message says so: a failed apply cannot promise nothing changed.
 
-`delete` removes the row and the rows that go with it and **cannot be undone except
-by `make rollback-restore`.** The Mac-side targets are `make cutover-blockers-list`
+`delete` removes the row and the rows that go with it and **has no tracked undo
+before the R2 cutover (Step 4).** The restore point is a web-app backup taken before
+Step 0 and copied off the host; `make rollback-restore ROLLBACK_ARCHIVE=<archive>`
+restores its data but also installs `.prev` and needs `.prev`'s storage levels to equal
+the archive's, so it may be refused (R2 runbook, Known gap 5).
+
+A refusal before the helper's unit started (a request that does not parse, a service
+that is not inactive, a bad `export_dir`) prints one `NOT-RUN` line on stdout and exits
+4: nothing ran and nothing changed, so a wrapper may remove the request it placed (the
+owner script and the Mac recipe do, by inode). Every other failure exits 1 and the
+request stays, because the command may have changed the store. `list` never prints
+`NOT-RUN`.
+
+The Mac-side targets are `make cutover-blockers-list`
 and `make cutover-blockers-apply REQUEST=<file>` (`scripts/cutover_blockers_offhost.py`,
 which holds every name the host prints to the same fixed grammar as the export
 targets). The owner's way, on the server, is `deploy/owner/cutover-blockers-list.sh`

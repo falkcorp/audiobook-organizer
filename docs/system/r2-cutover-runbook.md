@@ -101,7 +101,10 @@ It asks for your `sudo` password once, because the installer runs as root. In or
    `stage_local_conf`, and `checkpoint_dir` and `service_group` when set) from the host's current
    `/etc/audiobook-organizer/rollback.conf`, and refuses a value with a character it will not pass on;
 4. prints the installer's own dry run (every change, nothing changed);
-5. runs the install with `REPLACE_CONF=1` and
+5. saves what the install replaces, once, in `~/aorg-owner/p6-before/` (mode 0700): the sha256 of the installed
+   `rollback_helper.py`, a copy of `rollback.conf`, and the text of `sudo -n -l`. A rerun keeps the first save, and a
+   dry run saves nothing;
+6. runs the install with `REPLACE_CONF=1` and
    `--offline-env 'HOME=<state_dir> ABO_CORE_PATHS_STATE_DIR=<state_dir>'`, then checks the result.
 
 `REPLACE_CONF=1` is why the script works where a bare reinstall does not: without it the installer leaves a
@@ -134,17 +137,21 @@ fail.
 bash ~/aorg-owner/r2-p6-undo.sh
 ```
 
-Its pinned commit is the **previous** one, the main commit whose bundle was installed before P6, not the one P6
-installed. That matters: the new bundle's helper accepts only `ABO_*` names in `offline_env`, and the previous
-bundle's helper accepts only `HOME=`, `ABK_STATE_DIR=` and `ABK_*` and refuses any `ABO_*` token, so the previous
-`offline_env` can only be installed by the previous commit's installer. That installer does not check the value, so
-the script passes `--offline-env 'HOME=<state_dir> ABK_STATE_DIR=<state_dir>'` explicitly, leaves out
-`--export-dir`, reads the host's other values from `rollback.conf` the way P6 does, and uses `REPLACE_CONF=1` (the
-new `rollback.conf` differs from the one the old bundle renders). With the ABK value the file is the one the host
-had before the reinstall. Afterwards it removes `~/aorg-owner/export` if it is empty (it says so and leaves it when
-it is not), and checks that `rollback.conf` has no `export_dir`, that `offline_env` names `ABK_STATE_DIR` and no
-`ABO_` token, and that sudoers no longer grants the four helpers (their stubs stay on disk, ungranted). It ends with
-`done: P6 is undone`.
+Its pinned commit is the one whose helper bundle is installed on the host **when P6 runs**, not the one P6
+installs, and not necessarily the commit deployed before P6 (the bundle is installed by hand, so it can lag the
+deploy). The installer renders the bundle of the checkout it runs from, so the previous bundle can only be put back
+from the commit it came from. The script does not trust the pin: it refuses, before any `sudo` and under `--dry-run`
+too, unless the `rollback_helper.py` in its checkout has the sha256 that P6 saved. Then it re-runs the installer with
+`--offline-env 'HOME=<state_dir> ABK_STATE_DIR=<state_dir>'` given explicitly (the helper accepts `HOME`, `ABK_*` and
+`ABO_*` names and refuses only `ABK_STATE_DIR` together with an `ABO_` state directory), leaves out `--export-dir`,
+reads the host's other values from `rollback.conf` the way P6 does, and uses `REPLACE_CONF=1` (the new
+`rollback.conf` differs from the one the old bundle renders). Afterwards it removes `~/aorg-owner/export` if it is
+empty (it says so and leaves it when it is not) and checks: `rollback.conf` has no `export_dir`, `offline_env` names
+`ABK_STATE_DIR` and no `ABO_` token, `rollback.conf` is identical to the copy P6 saved (a difference is printed and
+fails the run), and `sudo -n -l` no longer grants the four helpers (their stubs stay on disk, ungranted). An empty
+`sudo -n -l` listing, or one without the host's own `restore-offline` line, fails the run: it proves nothing. It ends
+with `done: P6 is undone` and renames the save to `p6-before.undone-<UTC stamp>`, so a second P6 saves a fresh one;
+after a success a rerun refuses (nothing left to put back), after a failure it is safe to run again.
 
 The cost of the undo: `ABK_STATE_DIR` is back, which the flipped binary refuses, so `make rollback-restore` and
 `make rollback-restore RELEASE=<tag>` fail again on the flipped host until P6 is run again.
@@ -185,7 +192,7 @@ step says so.
 ## Path B: an install coming from the pre-freeze release
 
 Do every step, in order, Step 0 to Step 8. This is the whole cutover on one first boot, so Step 4's boot is much
-longer than the F3-07 boot.
+longer than the F3-07 boot. Step 0 stops the service and starts it again before Step 1; the site is down in between.
 
 ## The steps
 
@@ -194,14 +201,27 @@ longer than the F3-07 boot.
 **Do** (Path B; Path A records the F4-08 deploy's counts instead). On the pre-freeze release, finish or undo every
 account merge that is still in progress (the Users page shows them, with an Undo button). Then list the identity
 rows the cutover cannot convert, and fix or delete each one. The command opens the live store offline, so the
-service must be stopped first, and it runs as the service user; two root-owned helpers do both for you, and you run
-one script each.
+service must be stopped first, and it runs as the service user. Each part below is one owner script (and one
+`make` target for the agents); you type no `systemctl` and no `sudo`.
 
-1. **Stop the service.** The helpers never stop or start it, and the scripts below refuse unless the unit is
-   `inactive`. **There is no tracked step for stopping only the service yet** ([gap 2](#known-gaps)): the sudoers
-   drop-in already grants `systemctl stop` of the unit, but no `make` target or owner script wraps it. Ask the
-   agents for the stop step and do not type `systemctl` yourself.
-2. **List.** You run:
+1. **Take a restore point first.** A `delete` has no tracked undo before Step 4 (see Undo below), so this is the
+   only way back. With the service running, do Step 1's two actions now: press **Create Backup** in **Settings →
+   Library** and copy the new archive off the host, then run `make export-install-secrets` (the key and
+   `config.yaml` the archive cannot be restored without). Step 1 takes another archive later, after these fixes;
+   this one is the restore point for Step 0 only. If every row you will touch is a `fix`, you can skip it: a `fix`
+   is put back by applying the old value (Undo).
+2. **Stop the service.** The helpers never stop or start it, and the scripts below refuse unless the unit is
+   `inactive`. You run:
+
+   ```bash
+   bash ~/aorg-owner/service-stop.sh
+   ```
+
+   It reads the unit name from `rollback.conf`, does nothing if the unit is already `inactive`, and otherwise runs
+   the one command the sudoers drop-in already grants (`sudo -n /usr/bin/systemctl stop <unit>`, no new line) and
+   waits until the unit is `inactive`. The agents' equivalent is `make service-stop`. Both take a dry run
+   (`--dry-run`, `DRY_RUN=1`). While the service is stopped the site is down.
+3. **List.** You run:
 
    ```bash
    bash ~/aorg-owner/cutover-blockers-list.sh
@@ -211,40 +231,59 @@ one script each.
    `~/aorg-owner/blockers/<UTC stamp>/`: `aorg-cutover-blockers-<stamp>.txt`, the list, and, when something blocks,
    `aorg-cutover-blockers-<stamp>.json`, the rows **with their values**, which can be credential hashes. Keep the
    `.json` private. When nothing blocks it prints "No blocking rows: the cutover preflight is clean." and leaves
-   only the `.txt`.
-3. **Decide each row.** Per key you choose `fix` (give the row a corrected value) or `delete` (remove the row and
+   only the `.txt`. The list is the **installed build's** view of the store; Step 2's dry run with the RC binary is
+   the authority on what the cutover will refuse, so a clean list here does not replace it.
+4. **Decide each row.** Per key you choose `fix` (give the row a corrected value) or `delete` (remove the row and
    the rows that go with it). The agents write one request file per row, mode 0600, from the list and your choice
    (writing a file needs no `sudo`):
    `{"action":"fix","key":"<lowercase hex>","value":"<base64>"}` or `{"action":"delete","key":"<lowercase hex>"}`.
    The key is the hex string from the list, without a `hex:` prefix.
-4. **Apply, one row at a time.** For each request file you run:
+5. **Apply, one row at a time.** For each request file you run:
 
    ```bash
    bash ~/aorg-owner/cutover-blockers-apply.sh ~/aorg-owner/request.json
    ```
 
-   It puts the request in your export directory (never replacing a different one that is already there), runs the
-   helper, which runs `storage cutover-blockers fix` or `delete` (with `--confirm`) as the service user and deletes
-   the request when the command succeeded, then moves what the command printed to
-   `~/aorg-owner/blockers/<UTC stamp>/aorg-cutover-blockers-result-<stamp>.txt` and shows it. The helper accepts
-   exactly one action per request and refuses unknown fields. After a **failed** apply the request stays and the
-   change may or may not have happened: the script says so; run the list script again before trying again.
-5. **List again** until it prints the clean sentence. Then delete the request files and, once Step 4 succeeded, the
-   `.json` (they hold values).
+   The script checks the request with the installed helper's own parser first (a request the helper would refuse
+   stops here, before anything is placed), clears leftovers of an interrupted earlier run, puts the request in your
+   export directory (never replacing a different one that is already there), runs the helper, which runs `storage
+   cutover-blockers fix` or `delete` (with `--confirm`) as the service user and deletes the request when the command
+   succeeded, then moves what the command printed to
+   `~/aorg-owner/blockers/<UTC stamp>/aorg-cutover-blockers-result-<stamp>.txt` and shows it. After a success it
+   offers to delete your copy of the request file (it holds the value; `--delete-request` does it without asking).
+   The helper accepts exactly one action per request and refuses unknown fields.
+
+   Two ways it can stop, and what each means:
+   - **`NOT RUN`.** The helper refused before it started anything (the service was not inactive, the request was
+     not acceptable, the export directory was wrong). Nothing changed, and the script has already removed the
+     request it placed. Fix the cause and run it again.
+   - **`FAILED ... MAY have been applied`.** The helper started the command and it failed. The request stays and the
+     change may or may not have happened: run the list script again before trying again.
+6. **List again** until it prints the clean sentence, and delete any request file that is left, and, once Step 4
+   succeeded, the `.json` (they hold values).
+7. **Start the service again** before Step 1 (it needs the web app): `bash ~/aorg-owner/service-start.sh`
+   (`make service-start` for the agents). It does nothing if the unit is already `active`, otherwise runs the granted
+   `sudo -n /usr/bin/systemctl start <unit>` and waits until the unit is `active`; a unit that ends `failed` ends the
+   wait at once.
 
 The agents' Mac-side equivalents are `make cutover-blockers-list` and `make cutover-blockers-apply REQUEST=<file>`;
-they leave the same files in `~/aorg-offhost/<UTC stamp>/` and say the same things. The helpers run the command
-with the binary installed at the host's `bin`; if that binary has no `storage cutover-blockers` command the helper
-prints the command's refusal and delivers nothing: stop and tell the agents. The production host does not need any
-of this: it is on Path A.
+they leave the same files in `~/aorg-offhost/<UTC stamp>/` and say the same things (including `NOT RUN`, after
+which they remove the request they sent). The helpers run the command with the binary installed at the host's
+`bin`; if that binary has no `storage cutover-blockers` command the helper prints the command's refusal and
+delivers nothing: stop and tell the agents ([gap 2](#known-gaps)). The production host does not need any of this:
+it is on Path A.
 
 **Check:** `bash ~/aorg-owner/cutover-blockers-list.sh` prints "No blocking rows: the cutover preflight is clean."
-and Step 2's dry run reports 0 blocking rows and no merge in progress.
+and Step 2's dry run reports 0 blocking rows and no merge in progress. The service is `active` again
+(`bash ~/aorg-owner/service-start.sh` says so).
 
 **Undo:** a merge you finished can be undone from the Users page while you are still on the pre-freeze release. A
 `fix` can be put back by applying a `fix` of the old value, which the `.json` from the list before it still holds:
-keep that file until Step 4 has succeeded. **A `delete` cannot be undone except by `make rollback-restore`**: that is
-why the agents confirm each `delete` with you before they write its request.
+keep that file until Step 4 has succeeded. **A `delete` has no tracked undo before Step 4.** The only tracked way
+back is the restore point from part 1: `make rollback-restore ROLLBACK_ARCHIVE=<that archive>` restores the data,
+but it also installs `.prev`, and it refuses unless `.prev`'s storage levels equal the archive's, so it may not be
+usable before Step 4 ([gap 5](#known-gaps)). That is why the agents confirm each `delete` with you before they write
+its request, and why part 1 comes first.
 
 ### Step 1: archive, off host
 
@@ -494,11 +533,10 @@ Still open:
 
 1. **The off-host copy of the archive.** Before F8-04a the web app creates archives but has no download. R2-01c
    pins the download path once the core backups page is live.
-2. **Stopping the service for `storage cutover-blockers`, on Path B only (Step 0).** The list and apply helpers
-   (`bash ~/aorg-owner/cutover-blockers-list.sh` and `cutover-blockers-apply.sh`) exist and refuse unless the service
-   is already stopped, but nothing tracked stops it: the sudoers drop-in grants `systemctl stop` of the unit, and no
-   `make` target or owner script wraps that line. Until one does, ask the agents for the stop step rather than typing
-   `sudo`. The production host is on Path A and does not need it.
+2. **Whether the pre-freeze binary has `storage cutover-blockers` (Path B, Step 0).** The list and apply helpers run
+   the command of the binary installed at the host's `bin`. Nothing here establishes that the pre-freeze release has
+   it. If it does not, the helper prints the command's refusal and delivers nothing: stop and tell the agents. The
+   production host is on Path A and does not need it.
 3. **The measured R2 boot time.** R2-01c replaces the 4200 seconds in Step 4 with the measured number, and adds the
    Docker `start_period`.
 4. **The state-directory variable is static in `rollback.conf`.** `ABO_CORE_PATHS_STATE_DIR` alone works with a
@@ -508,6 +546,11 @@ Still open:
    fetch (`make rollback-restore RELEASE=<tag>`) already handles both generations: it retries once with
    `ABK_STATE_DIR` on exactly that refusal. What remains is the static name in `rollback.conf`; the general fix is a
    helper that picks the variable name by binary generation, scheduled after R2.
+
+5. **An archive restore that keeps the current binary.** `make rollback-restore ROLLBACK_ARCHIVE=<archive>` also
+   installs `.prev` and requires `.prev`'s storage levels to equal the archive's. Before Step 4 there is no R2
+   checkpoint, so a Step 0 `delete` can only be undone that way, and it may be refused. A restore of an archive that
+   leaves the binary alone is not built.
 
 ## Record
 

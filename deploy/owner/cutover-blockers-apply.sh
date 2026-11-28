@@ -28,7 +28,7 @@
 # for it before Step 4. The restore point is the web-app backup taken before
 # Step 0 (copied off the host): `make rollback-restore ROLLBACK_ARCHIVE=<that
 # archive>` restores the data, but it also installs the previous binary
-# (Known gap 3 in the runbook).
+# (Known gap 5 in the runbook).
 #
 # The service must ALREADY be stopped (bash ~/aorg-owner/service-stop.sh). This
 # script never stops or starts it, and it refuses before the sudo call if the
@@ -210,7 +210,7 @@ if [ "$RC" -eq 4 ] && [ "$NOT_RUN" -eq 1 ]; then
     rm -f -- "$IN_PLACE"
     echo "NOT RUN: the helper refused before it started (its message is above). Nothing changed, and the request this run placed was removed." >&2
   else
-    echo "NOT RUN: the helper refused before it started (its message is above). Nothing changed. The request in $EXPORT_DIR was there before this run, so it was left." >&2
+    echo "NOT RUN: the helper refused before it started (its message is above). Nothing changed. The request in $EXPORT_DIR is not one this run placed (it was there before, or it was replaced), so it was left." >&2
   fi
   exit 1
 fi

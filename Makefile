@@ -1256,9 +1256,12 @@ cutover-blockers-list:
 # refuses if the host already holds a request, copies it to export_dir under the
 # fixed name, sets mode 0600 and checks size and sha256 there, runs the helper
 # (no arguments), copies the result file back and prints it. The helper deletes
-# the request after a success. `delete` cannot be undone except by
-# `make rollback-restore`. The owner's equivalent on the server is
-# deploy/owner/cutover-blockers-apply.sh.
+# the request after a success. A `delete` has no tracked undo before the R2
+# cutover: the restore point is a web-app backup taken before Step 0 and copied
+# off the host (`make rollback-restore ROLLBACK_ARCHIVE=<it>` restores the data
+# but also installs .prev). A refusal before the helper started anything prints
+# NOT-RUN and exits 4; this recipe then removes the request it sent. The owner's
+# equivalent on the server is deploy/owner/cutover-blockers-apply.sh.
 REQUEST ?=
 cutover-blockers-apply: export AORG_OH_WHAT = apply
 cutover-blockers-apply: export AORG_OH_HOST = $(DEPLOY_HOST)

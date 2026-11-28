@@ -64,7 +64,7 @@ st = os.stat(a[-1])
 uid = str(st.st_uid)
 if os.environ.get("SHIM_FAKE_UID_FOR") and os.environ["SHIM_FAKE_UID_FOR"] in a[-1]:
     uid = "4242"
-print(a[1].replace("%a", oct(st.st_mode & 0o7777)[2:]).replace("%s", str(st.st_size)).replace("%u", uid))
+print(a[1].replace("%a", oct(st.st_mode & 0o7777)[2:]).replace("%s", str(st.st_size)).replace("%u", uid).replace("%i", str(st.st_ino)))
 """
 
 # install(1) that, when SHIM_RACE_FILE is set, makes that file right after installing:
@@ -807,8 +807,23 @@ class ApplyScript(BlockersBase):
         p = self.run_script()
         self.assertNotEqual(p.returncode, 0, text(p))
         self.assertIn("NOT RUN", p.stderr)
-        self.assertIn("was there before this run, so it was left", p.stderr)
+        self.assertIn("is not one this run placed", p.stderr)
         self.assertEqual(self.exported(), [REQUEST])
+
+    def test_a_not_run_never_removes_a_file_that_is_not_the_one_this_run_placed(self) -> None:
+        host = self.host()
+        # The helper says NOT-RUN, but by then the fixed name holds a different
+        # file (made while the old one still exists, so a new inode).
+        self.fake_stub(
+            "cutover-blockers-apply",
+            f'd={host.export}\necho another > "$d/.new" && mv -f "$d/.new" "$d/{REQUEST}"\n'
+            "echo NOT-RUN\nexit 4",
+        )
+        p = self.run_script(str(self.request()))
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("NOT RUN", p.stderr)
+        self.assertIn("is not one this run placed", p.stderr)
+        self.assertEqual((host.export / REQUEST).read_text(), "another\n")
 
     def test_a_not_run_needs_both_the_exit_status_and_the_line(self) -> None:
         self.host()
