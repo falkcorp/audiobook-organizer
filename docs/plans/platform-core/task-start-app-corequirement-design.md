@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/task-start-app-corequirement-design.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b87e569b-e3b4-4bd0-9fb1-e7e465d2b3a7 -->
 <!-- last-edited: 2026-11-28 -->
 
@@ -49,13 +49,18 @@ origin field.
   `required_permission` names the missing floor scope, plus a `Denied` audit record.
   `can_start` and `can_approve` report false when the floor fails.
 - It never applies to cancel, discard, resume, finish, decide or reject. It never
-  applies to any start whose actor is a module system actor: scheduler, window
-  members, outbox, same-module system Enqueue, core-service `StartIn`.
-- A child that `rc.Enqueue` starts under a user-started parent is not judged. This is
-  the rule `Perms.Start` already follows there, because no checker exists in a run.
-  The parent's floor was the decision point, which is HEAD parity.
-- A user's start of a window kind does not judge its members' floors. HEAD's
-  `/maintenance-window/run` asked only for settings.manage.
+  applies to any start whose actor is a module system actor: scheduler, a window's
+  members at run time, outbox, same-module system Enqueue, core-service `StartIn`.
+- A user's start of a window kind judges **every member's floor** in `permitWindow`,
+  beside the members' Start that it already judges. Members are always kinds with a
+  declared `Schedule` (`internal/scheduler/window.go:156-178`), and no class kind
+  declares one, so this narrows nothing against HEAD today.
+- **Deviation from the binding "every user enqueue path" constraint, for the
+  coordinator to rule on:** a child that `rc.Enqueue` starts under a user-started
+  parent is **not** judged. No checker exists inside a run, and `Perms.Start` follows
+  the same rule there (`start.go:224-228`). The floor is judged once, at the user's
+  start of the parent. The conforming variants are priced in section 4.4 (0.3 to 1
+  day) and in open question 5.
 - P7 boot validation follows W6: AllOf only, registered app scopes, no core scope,
   no Sensitive or Confining scope, a known kind, no duplicates. It also adds
   **completeness**: every registered kind needs a row, and boot fails naming every
@@ -89,7 +94,22 @@ core kind is in it. The class is:
 | A: ABO kinds whose HEAD start was ops v2 / v3 (`scan.trigger`) | 58 | `books:scan` |
 | B: native-only batch children (`batch_children.go:120,209,434`) | 3 | `books:scan` (their parent's) |
 | C: Repairs kinds (`internal/repairs/kinds.go:194`) | 3 | `books:edit` |
-| D: core kinds `core.integrations.release-holds`, `core.storage.census` | 2 | `books:scan` (+ `books:settings.manage` for census) |
+| D: core kinds `core.integrations.release-holds` (Start `core:integrations.manage`, `providerhttp/holds.go:63`) and `core.storage.census` (Start `core:system.manage`, `storagetasks/kinds.go:199`) | 2 | `books:scan`, `books:settings.manage`, and the `core:*` members of the settings.manage expansion |
+
+**Class C, verified at HEAD.** HEAD gated the Repairs plan and apply POSTs at
+`library.edit_metadata` on the route (HEAD `internal/server/wire_repairs_routes.go:30-56`).
+The handler then also checked each fixer's own permission: settings.manage for
+reconcile.missing-files (HEAD `plugins/maintenance/reconcile_fixer.go:200`), and
+users.manage for audible-read-status (`audible_read_status_fixer.go:166`) and for
+master-list-import (`master_list_import_fixer.go:142`). The native Start keeps only
+the fixer's permission, so `books:edit` is the scope that was dropped. The
+`/master-lists` routes' own gate (users.manage, roles.view, books:admin.view) belongs
+to those routes, not to the fixer.
+
+**Class D cannot be fully restored by a floor.** A floor may not name a `core:*`
+scope (section 3.4, row 6). So the `core:*` members of HEAD's settings.manage
+expansion that the native Start dropped stay dropped. That residue belongs to
+Ruling 1's OperatorRequirement (open question 9).
 
 That is **64 ABO + 2 core = 66**. The sizing's phrase "66 of the 134 registered
 kinds" counts the 2 core kinds inside the 66, although they are not among the 134
@@ -223,6 +243,15 @@ The gate is keyed on the **checker and the actor**, not on the actor's method al
 `Missing` is the first scope of `F`, in declared order, that `s.who.Has` refuses.
 `AuthOff` is set when the actor's method is the auth-disabled one.
 
+**Window kinds.** `permitWindow` runs only when the start has a checker
+(`start.go:261-263`). For each current member it already requires the member's Start
+(`start.go:268-276`). The same loop also requires the member's floor, and refuses with
+the same typed error, naming the member. This is about 5 lines. Members are always
+kinds with a declared `Schedule`, because the scheduler draws them from its scheduled
+entries (`internal/scheduler/window.go:156-178`). None of the 64 class kinds declares
+one, so the check narrows nothing against HEAD's settings-only
+`POST /maintenance-window/run` (HEAD `wire_operations_routes.go:123`) today.
+
 ### 4.2 Every start path, and whether the floor applies
 
 | # | Path | Actor / checker | Floor? | file:line | Reachable at 9ae4c764b |
@@ -231,9 +260,9 @@ The gate is keyed on the **checker and the actor**, not on the actor's method al
 | P2 | Approve accept → apply run → `prepare(modeApprove)` | request principal | **yes**: handler pre-check + `permitStart` | `taskhttp/control.go:185-244`; `executor/control.go:419-498` (apply `prepare` at `:470`) | built, not mounted (same) |
 | P3 | Repairs plan (a Preview start) and Repairs approve | as P1 / P2 | **yes** (as P1 / P2) | `internal/repairs/kinds.go:194` (Start = Approve = View) | only through P1 / P2. HEAD's opsv3 approver (`internal/server/handlers/opsv3/runs.go:454`) is HEAD's own path, not the executor. |
 | P4 | Module `Client.Start` (`Deps.Tasks`, `ModuleClient`) inside a request | the request principal wins over the module key | **yes**: `permitStart` | `executor/module_client.go:38-48,105-111` | yes. No ABO caller of `tasks.Client` exists at this tip (grep of `internal/` and `cmd/`). Future owner routes (F5-18 (i) user-merge) and any re-pointed ops route land here. |
-| P5 | Core owner routes: `core.diagnostics.export`, `core.updater.*` | request principal | **yes**: `permitStart` (their rows are `None`; section 8) | `kernel/diagnostics_wire.go:127`; `kernel/updater.go:182` | yes |
-| P6 | User start of a window kind | request principal | **window kind: no row** (core exemption). **Members: not judged** (deliberate, section 4.4). | `executor/start.go:260-278` | via P1 |
-| P7 | `rc.Enqueue` under a **user** actor (batch children and every child) | user actor, `s.who == nil` | **no**: inherits (section 4.4) | `executor/attempt.go:321-357`; callers: `maintenance/batch_sweep.go:463` (the 3 `.batch` children), `dedup/kinds_chain.go:91` (`acoustid.fingerprint-rescan`), `:159,161` (dedup children), `maintenance/optimize.go:257` (group-6 children) | yes |
+| P5 | Core owner route: `core.diagnostics.export` | request principal | **yes**: `permitStart` (its row is `None`; section 8) | `kernel/diagnostics_wire.go:127` | yes. `core.updater.*` would be started the same way (`kernel/updater.go:182`), but no code registers those kinds at this tip: `updater/tasks.go:133-177` defines them and nothing calls them. When they register, completeness requires their rows. |
+| P6 | User start of a window kind | request principal | **window kind: no row** (core exemption). **Members: yes**, each member's floor in `permitWindow` (section 4.1). | `executor/start.go:260-278` | via P1 |
+| P7 | `rc.Enqueue` under a **user** actor (batch children and every child) | user actor, `s.who == nil` | **no**: inherits. **This is a deviation** (section 4.4). | `executor/attempt.go:321-357`; callers: `maintenance/batch_sweep.go:463` (the 3 `.batch` children), `dedup/kinds_chain.go:91` (`acoustid.fingerprint-rescan`), `:159,161` (dedup children), `maintenance/optimize.go:257` (group-6 children) | yes |
 | S1 | Scheduler | system actor via `StartIn` | **no** | `internal/scheduler/scheduler.go:455`; actor stamped at `executor/start.go:81` | yes |
 | S2 | Window members at run time | system actor via `StartIn` | **no** | `internal/scheduler/window.go:136` | yes |
 | S3 | Outbox target (`ConsumeIntoTask`) | owner's system actor, `s.outbox` | **no** | `core/outbox/consumer.go:97`; `executor/start.go:83,293` | yes |
@@ -256,8 +285,8 @@ message, but it cannot choose the kind. They are system origins, as the F5-18 le
 requires.
 
 **Schedules.** A user cannot point a schedule at a floored kind.
-`PATCH /schedules/{kind}` acts only on a kind that declares a `Schedule`
-(`taskhttp/schedules.go:33`), and none of the 64 ABO class kinds declares one (all 64
+`PATCH /schedules/{kind}` answers 404 `tasks.no_schedule` for a kind with no
+configurable schedule (`taskhttp/schedules.go:83-96`), and none of the 64 ABO class kinds declares one (all 64
 have `sched=false` in the dump). Open question 4 asks whether P7 should refuse a
 floor together with a `Schedule`.
 
@@ -283,7 +312,7 @@ The executor stays the enforcement point. The handlers only shape the answer. A
 mutant that deletes a handler check is caught by the shape cells; one that deletes
 the `permitStart` check is caught by P4 and the direct-`Approve` cells (section 9).
 
-### 4.4 Deliberate non-points
+### 4.4 Non-points (the binding constraint), and one deviation
 
 | Not judged | Where | Why |
 |---|---|---|
@@ -291,8 +320,42 @@ the `permitStart` check is caught by P4 and the direct-`Approve` cells (section 
 | Decide (resume, finish, drop) | executor `control.go:319-343` (fallback `:337-340`); handler `taskhttp/control.go:276-282` | same, and the fallback reads `Approve`, else `Start` |
 | Approve **reject** | `executor/control.go:455-458` | a decision, not a start |
 | Executor resume sweep, `DecideAs` | `executor/resume.go`, `control.go:355-` | system, or not a fresh start |
-| Window members on a user's window start | `permitWindow`, `start.go:260-278` | HEAD's `POST /maintenance-window/run` asked only for settings.manage (HEAD `wire_operations_routes.go:123`), so judging members' floors would narrow. 0 of the 15 scheduled ABO kinds is in the class. Open question 2. |
-| `rc.Enqueue` child under a user actor | `attempt.go:345` (`s.who == nil`) | No checker exists in a run, which is the rule `permitStart`'s doc states for Start (`start.go:224-228`). At HEAD the indirect start was gated by the **parent's** route. Example: `dedup` lsh-index-build queued `acoustid.fingerprint-rescan` at HEAD too (`dedup/kinds_chain.go:84-91`). Judging the child against its own floor would narrow HEAD. Open question 5. |
+| Window members **at run time** | `scheduler/window.go:136` | system actor (S2). The user's start of the window was judged (P6). |
+
+**Deviation: a child that `rc.Enqueue` starts under a user actor
+(`attempt.go:345`, `s.who == nil`).** The brief makes "any enqueue path a user request
+can drive" binding, and this design does not judge the child. The reasons:
+
+- No checker exists inside a run. `permitStart`'s doc states the same limit for
+  `Perms.Start` (`start.go:224-228`).
+- The floor is judged once, at the user's start of the parent.
+- The children reachable today:
+  - the 3 `.batch` children, whose parent has the same floor;
+  - `acoustid.fingerprint-rescan`, queued by dedup lsh-index-build
+    (`dedup/kinds_chain.go:84-91`);
+  - the dedup and group-6 children.
+- lsh-index-build is not registered yet, and its HEAD start route is unverified. If
+  its row ends up `None`, a user who may start it reaches a floored child. Whether
+  HEAD allowed the same reach is not established. It is plausible, because HEAD
+  queued the rescan as a child too, but it is not verified.
+
+The coordinator rules on it (open question 5). The conforming variants:
+
+- **(i) Runtime coverage, about 0.3 day core.** Under a non-system actor, a child is
+  admitted only when its floor's scopes are a subset of the literal scopes of the
+  parent's AllOf Start ∪ the parent's floor, otherwise the typed error. It needs no
+  stored state and fails closed. It refuses any pair whose rows disagree, so it can
+  narrow HEAD where HEAD's parent route was the only gate. An ABO test over the known
+  pairs finds those before runtime.
+- **(ii) Starter snapshot, about 1 day core.** At a user start, record on the run
+  which of the table's floor scopes the starter held. A new `RunRecord` field is
+  inherited by children through `Enqueue`. The child is judged against that set.
+  This is exact, but it is a stored field plus importer and fold handling.
+
+### 4.5 Note on the B1 origins
+
+Every origin named by the F5-18 lead is S1-S5 above. Each has its own bypass cell in
+section 9 (C11a-e).
 
 ## 5. Refusal shape and audit
 
@@ -333,8 +396,8 @@ ignored by the SEC-9 check.
   `books:scan`, so a `books:scan` floor would narrow that route. F5-18 (i) closes the
   generic route with `OwnerRouteOnly` and puts HEAD's gate on the owner route. The
   two compose.
-- `core.diagnostics.export` (already `OwnerRouteOnly`) and `core.updater.*` are
-  likewise `None`.
+- `core.diagnostics.export` (already `OwnerRouteOnly`) is likewise `None`.
+  `core.updater.*` would be too, once it is registered.
 
 ### 6.3 `SystemStart` (B1)
 
@@ -352,9 +415,12 @@ F5-18 lead to confirm this. Each origin has a bypass cell (section 9, cells C11a
 - Accept starts an apply run, and `Executor.Approve` already requires `Perms.Start`
   for it through `prepare` (`control.go:417-418,470`). The floor joins it there.
 - Reject and decide are not judged.
-- For the 3 class-C Repairs kinds, HEAD gated approve (including reject) **and View**
-  with the same set that included `books:edit`. A Start-only floor restores the start
-  and the accept. It does not restore reject or View (open question 8; not designed
+- For the 3 class-C Repairs kinds, HEAD's plan and apply POSTs both asked for
+  `library.edit_metadata` (section 2). The floor restores both: the plan is a start,
+  and apply is the accept's apply run. HEAD's Repairs lane has no reject route. HEAD's
+  rows read asked for `library.view` plus the fixer's permission. The native `View`
+  is the fixer's permission alone (`internal/repairs/kinds.go:194`), which drops
+  `books:view`. A start floor cannot restore that (open question 8; not designed
   here: "fresh Start only").
 
 ### 6.5 Auth-off
@@ -406,7 +472,7 @@ when the flip is on.
 | Repairs kinds whose Start is `books:edit` | 20 | `None`: reasonStartCarriesHEAD |
 | Settings-route kinds (35 manual + 15 scheduled; includes F5-18 (ii)'s 16) | 50 | `None`: reasonSettingsRoute |
 | `core.storage.census` | 1 | `AllOf(books:scan, books:settings.manage)` |
-| `core.integrations.release-holds` | 1 | `AllOf(books:scan)`. Ruling 1's OperatorRequirement + `SystemStart` change its Start; this row is the `books:scan` residue. |
+| `core.integrations.release-holds` | 1 | `AllOf(books:scan, books:settings.manage)`, as for census: the native Start is `core:integrations.manage` alone (`providerhttp/holds.go:63`). Ruling 1's OperatorRequirement + `SystemStart` change its Start; this row is the `books:*` residue. The dropped `core:*` members are Ruling 1's (open question 9). |
 | `core.storage.compact`, `core.tasks.prune`, `core.log.journal.prune`, `core.ai.batch-poll` | 4 | `None`: reasonCoreNotInClass |
 | `core.diagnostics.export` | 1 | `None`: reasonOwnerRoute |
 | `core.window.<name>` | n/a | core's built-in exemption |
@@ -472,13 +538,13 @@ and `gotham.patrol` (not floored), floor scope `gotham:watch`, AuthRequired scop
 | C7b | direct `Executor.Approve` (no handler) → typed error | remove the floor from `permitStart` (C1's mutant, via the apply path) |
 | C8 | `approveRun` **reject** without the floor → succeeds | apply the floor to reject |
 | C9 | `can_start` / `can_approve`: false without the floor, true with it | drop the floor from `definitionView` |
-| C10 | User starts a window whose member is floored, holding the members' Start but not the floor → **starts** (deliberate non-point) | add floors to `permitWindow` |
+| C10 | User starts a window whose member is floored, holding the members' Start but not the floor → refused, naming the member and its floor scope; holding both → starts | drop the floor from `permitWindow` |
 | C11a | Scheduler `StartIn` of a floored scheduled kind → starts | judge the floor for every start that has a floor, whatever the actor |
 | C11b | Outbox `ConsumeIntoTask` of a floored kind → starts; P7 `CheckOutboxStart` passes | same |
 | C11c | System-actor parent `rc.Enqueue` of a floored child → starts | same |
 | C11d | Core-service `StartIn` (batch-apply shape) of a floored kind → starts | same |
 | C11e | Scheduled window run starts a floored member → starts | same |
-| C12 | User-actor parent `rc.Enqueue` of a floored child → starts. ABO twin: lsh-index-build → `acoustid.fingerprint-rescan` | refuse a floored child under a non-system actor |
+| C12 | User-actor parent `rc.Enqueue` of a floored child → starts (the deviation, section 4.4; if the coordinator picks variant (i) or (ii), this cell flips to "refused"). ABO twin: lsh-index-build → `acoustid.fingerprint-rescan`, once lsh-index-build is registered | refuse a floored child under a non-system actor |
 | C13a | Holder of Cancel / Start but not the floor cancels and discards a floored run | fold the floor into `Perms.Start` at registration (the hybrid) |
 | C13b | Holder of Approve / Start but not the floor decides resume, finish and drop | same, and separately: add the floor to `Decide` |
 | C14a | P7: a registered kind with no row → boot fails naming it (and every other missing kind) | skip completeness |
@@ -505,7 +571,8 @@ and `gotham.patrol` (not floored), floor scope `gotham:watch`, AuthRequired scop
 | `core/module/validation.go` | `ProblemStartCoRequirement` | < 0.1 d |
 | `core/kernel/kernel.go`, `tasks_checks.go`, `core_kinds.go` + tests | Config field; `startCoRequirementProblems` (rows 1-9); `CoreTaskKinds()`; window exemption | 0.5 d |
 | `core/kernel/tasks.go` | build the map; pass it to the executor and taskhttp | 0.1 d |
-| `core/internal/executor/options.go`, `executor.go`, `start.go`, `errors.go` + tests | Options field; `New` check; floor in `permitStart`; typed error; cells C1-C4, C7b, C10-C13, C16-C17 | 0.6 d |
+| `core/internal/executor/options.go`, `executor.go`, `start.go`, `errors.go` + tests | Options field; `New` check; floor in `permitStart` and `permitWindow`; typed error; cells C1-C4, C7b, C10-C13, C16-C17 | 0.6 d |
+| (only if the coordinator conforms on enqueue) `executor/start.go` / `attempt.go`, or `tasks.RunRecord` + store | variant (i) runtime coverage, or variant (ii) starter snapshot (section 4.4) | +0.3 d (i) or +1 d (ii) |
 | `core/internal/taskhttp/routes.go`, `start.go`, `control.go`, `definitions.go`, `problem.go` + tests | Deps field; `startRun` / `approveRun` pre-checks + `Denied`; `can_*`; `mapError` | 0.5 d |
 | `core/coretest/harness.go` | option for apps' integration tests (W6 did the same) | < 0.1 d |
 | **Core subtotal** | | **≈ 2.3 d** |
@@ -519,9 +586,10 @@ and `gotham.patrol` (not floored), floor scope `gotham:watch`, AuthRequired scop
 1. **B1 has not landed.** The origin-based `SystemStart` is not in code. The design
    survives because it keys on actor and checker. It breaks if B1 lets a
    user-actor start carry a system origin (open question 7).
-2. **Inheritance through `rc.Enqueue`.** A user who may start an unfloored parent
-   reaches a floored child (lsh-index-build → fingerprint-rescan). This is HEAD
-   parity, but it is reach the table does not show. C12 and C20 list every pair.
+2. **Inheritance through `rc.Enqueue` (the deviation).** A user who may start an
+   unfloored parent reaches a floored child (lsh-index-build → fingerprint-rescan).
+   That reach is plausibly HEAD's too, but it is unverified, and the table does not
+   show it. C12 and C20 list every pair.
 3. **taskhttp is unmounted.** P1-P3 are unit-level until F2-16. Until then the only
    live enforcement is `permitStart`, for P4 and P5.
 4. **Two checks on approve.** The handler pre-check and `permitStart` can drift.
@@ -530,15 +598,18 @@ and `gotham.patrol` (not floored), floor scope `gotham:watch`, AuthRequired scop
    kind (`core.backup.*`, `core.updater.*` when they register) fails ABO's boot
    until ABO's row lands. This is intended, and it is the same repo, so the same PR
    adds the row.
-6. **Window narrowing, if it is ever added.** Section 4.4 keeps windows out.
-   Adding them later narrows against HEAD's settings-only window route only if a
-   class kind becomes a window member.
+6. **Window narrowing, later.** `permitWindow` judges members' floors. That narrows
+   against HEAD's settings-only window route only if a floored kind gains a
+   `Schedule` and joins a window. Open question 4's P7 refusal would rule that out.
 7. **Owner-route answer shape.** An ABO owner route that calls `Client.Start` must
    map `*StartCoRequirementError`. Otherwise the floor answers with a generic 403
    (`tasks.actor_not_permitted`).
-8. **Class C stays partial.** Reject and View for the 3 Repairs kinds keep the
-   native gate (open question 8).
-9. **Describe sees module kinds only.** A missing core-kind row fails a real boot,
+8. **Class C View stays partial.** The rows read for the 3 Repairs kinds keeps the
+   native `View`, without HEAD's `books:view` (open question 8).
+9. **Class D residue.** A floor cannot name `core:*`, so the `core:*` members of
+    HEAD's settings.manage expansion stay dropped on release-holds and census until
+    Ruling 1 (open question 9).
+10. **Describe sees module kinds only.** A missing core-kind row fails a real boot,
    not CI's describe. C14c and an ABO unit test (C20) close that.
 
 ## 12. Alternatives
@@ -568,22 +639,28 @@ and `gotham.patrol` (not floored), floor scope `gotham:watch`, AuthRequired scop
 1. Should core **require** `TaskStartCoRequirements` from every app that has
    `TasksBoot` (so that `coretest` and `examples` carry rows), or arm completeness
    only when the field is non-nil, as designed, with ABO's non-nil pin?
-2. **Windows.** Keep members unjudged on a user's window start (HEAD parity, as
-   designed), or judge members' floors in `permitWindow` (fail-closed, and a
-   narrowing against HEAD's settings-only window route if a class kind is ever a
-   member)?
+2. **Windows.** This design judges members' floors in `permitWindow`. It conforms to
+   the binding constraint and narrows nothing today, because members always declare a
+   `Schedule` and no floored kind does. Confirm.
 3. **`can_approve`**: AND the floor (as designed, since accept is a start), even
    though reject stays available without it?
 4. Should P7 refuse a floored kind that declares a `Schedule`, because a
    `core:tasks.manage` holder could then run it on a timer as the system actor?
    None does today.
-5. **Transitive reach** through `rc.Enqueue` under a user actor (risk 2): accept it
-   as HEAD parity, or add a static rule (floor(child) ⊆ floor(parent)) once
-   parent → child pairs are declared?
+5. **The enqueue deviation** (section 4.4, risk 2). There are three options:
+   - accept inheritance (as designed: no extra cost; the reach is plausibly HEAD's,
+     but unverified);
+   - variant (i), runtime coverage (+0.3 day; it may narrow where rows disagree, and
+     an ABO pair test finds those first);
+   - variant (ii), starter snapshot (+1 day; exact, with a stored field).
 6. Add a `Denied` record for **Start** refusals at `startRun` too (about 0.1 day),
    or only for the floor, as designed?
 7. **F5-18 lead:** confirm that B1's origins always carry a module system actor and
    that `Client.Start` can never set one.
-8. **Class C:** should the 3 Repairs kinds' reject and View regain `books:edit`?
-   That would need an Approve/View co-requirement, which this design does not cover
-   ("fresh Start only").
+8. **Class C View:** should the 3 Repairs kinds' rows read regain HEAD's `books:view`?
+   That would need a View co-requirement, which this design does not cover ("fresh
+   Start only").
+9. **Class D residue:** the `core:*` members of HEAD's settings.manage expansion stay
+   dropped on release-holds and census, because a floor cannot name `core:*`. Should
+   they wait for Ruling 1's OperatorRequirement (both kinds), or does census need its
+   own ruling?
