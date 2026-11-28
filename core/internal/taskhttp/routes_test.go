@@ -120,7 +120,7 @@ func TestRoutes_PermissionTable(t *testing.T) {
 func TestNew_RefusesAMissingDependency(t *testing.T) {
 	ok := func() Deps {
 		g := newRig(t)
-		return Deps{Client: g.client, Approver: g.appr, Runs: g.runs, Definitions: defs(), Config: g.cfg, Audit: g.aud}
+		return Deps{Client: g.client, Approver: g.appr, Runs: g.runs, Counts: g.runs.Counts, Definitions: defs(), Config: g.cfg, Audit: g.aud}
 	}
 	for _, c := range []struct {
 		name string
@@ -130,6 +130,7 @@ func TestNew_RefusesAMissingDependency(t *testing.T) {
 		{"client", func(d *Deps) { d.Client = nil }, errNoClient},
 		{"approver", func(d *Deps) { d.Approver = nil }, errNoApprover},
 		{"runs", func(d *Deps) { d.Runs = nil }, errNoRuns},
+		{"counts", func(d *Deps) { d.Counts = nil }, errNoCounts},
 		{"config", func(d *Deps) { d.Config = nil }, errNoConfig},
 		{"audit", func(d *Deps) { d.Audit = nil }, errNoAudit},
 		{"nil definition", func(d *Deps) { d.Definitions = append(d.Definitions, nil) }, errNilDef},

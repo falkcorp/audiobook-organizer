@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -117,6 +118,7 @@ func StoresSuite(t *testing.T, newStores func(*testing.T) tasks.Stores) {
 		{"DebounceMergeAndFlush", testDebounce, false},
 		{"ClockPauseStandDownStamps", testClockPauseStandDownStamps, false},
 		{"TerminalNeedsFinishTime", testTerminalNeedsFinish, false},
+		{"CountsByKindSplitsTheCensus", testCountsByKind, false},
 		{"NewIDUnique", testNewID, false},
 	}
 	t.Run("CAS", func(t *testing.T) {
@@ -1913,6 +1915,64 @@ func imported(t *testing.T, s tasks.Stores) (have, total int) {
 	cn, err := s.Runs.Counts(ctx)
 	check(err == nil && cn[tasks.StateInterrupted] == 1 && cn[tasks.StateSucceeded] == 1)
 	return have, total
+}
+
+// testCountsByKind: CountsByKind is Counts split by kind, follows a run
+// through its transitions, and sums back to Counts.
+func testCountsByKind(t *testing.T, f *fixture) {
+	ctx := t.Context()
+	if got, err := f.Runs.CountsByKind(ctx); err != nil || len(got) != 0 {
+		t.Fatalf("CountsByKind of an empty store = %v, %v", got, err)
+	}
+	patrol := rec("patrol-1", kindPatrol, tasks.StateQueued)
+	f.insert(t,
+		patrol,
+		rec("patrol-2", kindPatrol, tasks.StateSucceeded),
+		rec("patrol-3", kindPatrol, tasks.StateSucceeded),
+		rec("case-1", kindCase, tasks.StateFailed),
+		rec("intake-1", kindIntake, tasks.StateSucceeded),
+	)
+	check := func(label string, want map[tasks.Kind]map[tasks.RunState]int64) {
+		t.Helper()
+		got, err := f.Runs.CountsByKind(ctx)
+		if err != nil {
+			t.Fatalf("%s: CountsByKind: %v", label, err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: CountsByKind = %v, want %v", label, got, want)
+		}
+		sum := map[tasks.RunState]int64{}
+		for _, byState := range got {
+			for s, n := range byState {
+				sum[s] += n
+			}
+		}
+		if all := f.counts(t); !reflect.DeepEqual(sum, all) {
+			t.Fatalf("%s: CountsByKind sums to %v, Counts = %v", label, sum, all)
+		}
+	}
+	check("seeded", map[tasks.Kind]map[tasks.RunState]int64{
+		kindPatrol: {tasks.StateQueued: 1, tasks.StateSucceeded: 2},
+		kindCase:   {tasks.StateFailed: 1},
+		kindIntake: {tasks.StateSucceeded: 1},
+	})
+	if _, err := f.transition(ctx, patrol, tasks.StateRunning, func(n *tasks.RunRecord) { n.FenceEpoch++ }); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	check("after a claim", map[tasks.Kind]map[tasks.RunState]int64{
+		kindPatrol: {tasks.StateRunning: 1, tasks.StateSucceeded: 2},
+		kindCase:   {tasks.StateFailed: 1},
+		kindIntake: {tasks.StateSucceeded: 1},
+	})
+	if err := f.writeRuns(ctx, func(ctx context.Context, b *storage.Batch) error {
+		return f.Runs.Delete(ctx, b, "case-1")
+	}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	check("after deleting the only run of a kind", map[tasks.Kind]map[tasks.RunState]int64{
+		kindPatrol: {tasks.StateRunning: 1, tasks.StateSucceeded: 2},
+		kindIntake: {tasks.StateSucceeded: 1},
+	})
 }
 
 // testImportCrash: a crash at every point of an import batch leaves the

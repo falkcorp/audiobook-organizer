@@ -21,11 +21,16 @@ type Approver interface {
 	Approve(ctx context.Context, id tasks.RunID, a tasks.ApproveRequest) error
 }
 
+// Counter counts the runs the caller may view, by state: the executor's
+// VisibleCounts. It is not the run store's Counts, which counts every run, so
+// a caller cannot be told of runs Client.Get would answer 404 for.
+type Counter func(ctx context.Context) (map[tasks.RunState]int64, error)
+
 // RunReader is the read side of the run store that Client does not expose.
 // tasks.RunStore satisfies it. A route calls it only after Client.Get
-// returned the run, so the definition's View rule has been applied.
+// returned the run, so the definition's View rule has been applied. It has no
+// census: a count goes through Counter.
 type RunReader interface {
-	Counts(ctx context.Context) (map[tasks.RunState]int64, error)
 	Rows(ctx context.Context, id tasks.RunID) iter.Seq2[tasks.Row, error]
 	Pages(ctx context.Context, id tasks.RunID, q tasks.PageQuery) iter.Seq2[tasks.PageEntry, error]
 }

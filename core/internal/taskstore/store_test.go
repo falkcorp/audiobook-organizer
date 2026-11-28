@@ -506,3 +506,69 @@ func TestKeyParsers(t *testing.T) {
 		t.Fatal("IdemPrefix(kind)")
 	}
 }
+
+// TestKindStateCounts: the census split by kind comes from the two keys-only
+// indexes, follows a transition and a kind rewrite, and sums to StateCounts.
+func TestKindStateCounts(t *testing.T) {
+	st := boot(t)
+	ctx := t.Context()
+	got, err := st.KindStateCounts(ctx)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("KindStateCounts of an empty store = %v, %v", got, err)
+	}
+	mk := func(id, kind, state string) RunIndex {
+		return RunIndex{ID: id, Kind: kind, State: state, Queued: state == "queued", Enqueued: t0(), Terminal: state == "succeeded", Finished: t0()}
+	}
+	patrol := mk("patrol-1", "gotham.patrol", "queued")
+	commitRun(t, st, nil, patrol)
+	commitRun(t, st, nil, mk("patrol-2", "gotham.patrol", "succeeded"))
+	commitRun(t, st, nil, mk("case-1", "gotham.case-file", "succeeded"))
+	want := map[string]map[string]int64{
+		"gotham.patrol":    {"queued": 1, "succeeded": 1},
+		"gotham.case-file": {"succeeded": 1},
+	}
+	check := func(label string) {
+		t.Helper()
+		got, err := st.KindStateCounts(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != len(want) {
+			t.Fatalf("%s: KindStateCounts = %v, want %v", label, got, want)
+		}
+		for k, byState := range want {
+			if len(got[k]) != len(byState) {
+				t.Fatalf("%s: kind %s = %v, want %v", label, k, got[k], byState)
+			}
+			for s, n := range byState {
+				if got[k][s] != n {
+					t.Fatalf("%s: %s/%s = %d, want %d", label, k, s, got[k][s], n)
+				}
+			}
+		}
+		flat, err := st.StateCounts(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := map[string]int64{}
+		for _, byState := range got {
+			for s, n := range byState {
+				sum[s] += n
+			}
+		}
+		if len(sum) != len(flat) {
+			t.Fatalf("%s: per-kind sum %v, StateCounts %v", label, sum, flat)
+		}
+		for s, n := range flat {
+			if sum[s] != n {
+				t.Fatalf("%s: per-kind sum %v, StateCounts %v", label, sum, flat)
+			}
+		}
+	}
+	check("seeded")
+	running := patrol
+	running.State, running.Queued = "running", false
+	commitRun(t, st, &patrol, running)
+	want["gotham.patrol"] = map[string]int64{"running": 1, "succeeded": 1}
+	check("after a claim")
+}

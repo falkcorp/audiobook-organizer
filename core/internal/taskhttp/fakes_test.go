@@ -480,7 +480,7 @@ func newRig(t *testing.T, edit ...func(*Deps)) *rig {
 	g.cfg = &fakeConfig{keys: map[config.Path]config.KeyState{
 		sweepKey: {Path: sweepKey, Effective: json.RawMessage(`{"enabled":true,"every":"6h"}`)},
 	}}
-	d := Deps{Client: g.client, Approver: g.appr, Runs: g.runs, Definitions: defs(), Config: g.cfg, Audit: g.aud}
+	d := Deps{Client: g.client, Approver: g.appr, Runs: g.runs, Counts: g.runs.Counts, Definitions: defs(), Config: g.cfg, Audit: g.aud}
 	for _, e := range edit {
 		e(&d)
 	}

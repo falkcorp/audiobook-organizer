@@ -105,6 +105,12 @@ type RunStore interface { //nolint:interfacebloat // spec-mandated SDK interface
 	Unfinished(ctx context.Context) iter.Seq2[RunRecord, error]       // the resume sweep's input
 	List(ctx context.Context, q RunQuery) iter.Seq2[RunRecord, error] // includes terminal history, in RunFilter order
 	Counts(ctx context.Context) (map[RunState]int64, error)           // derived from the state index (5T.6.1)
+	// CountsByKind is Counts split by kind: the runs of each kind in each
+	// state, derived from the kind and state indexes. It exists so a reader
+	// that must count only the runs a caller may view decides visibility once
+	// per kind rather than once per run (F5-18 reach R2). A run created while
+	// it scans may be left out.
+	CountsByKind(ctx context.Context) (map[Kind]map[RunState]int64, error)
 
 	// Per-run pages: transition trail, Preview intents, item outcomes, log.
 	AppendEvent(ctx context.Context, b *storage.Batch, id RunID, seq uint64, e RunEvent) error

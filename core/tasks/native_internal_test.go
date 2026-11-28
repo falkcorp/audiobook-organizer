@@ -313,9 +313,10 @@ func TestNativeRefusals(t *testing.T) {
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 	for name, err := range map[string]error{
-		"Get":    func() error { _, err := e.runs.Get(cancelled, run.ID); return err }(),
-		"Counts": func() error { _, err := e.runs.Counts(cancelled); return err }(),
-		"Prune":  func() error { _, err := e.runs.Prune(cancelled, time.Now(), 1); return err }(),
+		"Get":          func() error { _, err := e.runs.Get(cancelled, run.ID); return err }(),
+		"Counts":       func() error { _, err := e.runs.Counts(cancelled); return err }(),
+		"CountsByKind": func() error { _, err := e.runs.CountsByKind(cancelled); return err }(),
+		"Prune":        func() error { _, err := e.runs.Prune(cancelled, time.Now(), 1); return err }(),
 		"Stamped": func() error {
 			_, _, err := e.runs.Stamped(cancelled, entity.Ref{Module: "gotham", Kind: "villains"}, "gotham.patrol")
 			return err

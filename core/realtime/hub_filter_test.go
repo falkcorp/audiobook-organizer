@@ -365,7 +365,7 @@ func TestCatalog_RedactAppliedOnEverySurface(t *testing.T) {
 	c := newCast(t, hubOptions{})
 	v := runView("Barbara Gordon cleared the vault")
 	rest, err := taskhttp.New(taskhttp.Deps{
-		Client: restClient{v: v}, Approver: noApprover{}, Runs: restRuns{}, Config: restConfig{}, Audit: sink{},
+		Client: restClient{v: v}, Approver: noApprover{}, Runs: restRuns{}, Counts: func(context.Context) (map[tasks.RunState]int64, error) { return nil, nil }, Config: restConfig{}, Audit: sink{},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -413,6 +413,7 @@ func (k *Kernel) constructTasks(ctx context.Context, defs []tasks.Definition) er
 		Client:      x,
 		Approver:    x,
 		Runs:        kt.stores.Runs,
+		Counts:      executor.VisibleCounts(x),
 		Definitions: defs,
 		Config:      cfg.store,
 		Audit:       k.audit,

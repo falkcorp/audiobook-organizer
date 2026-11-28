@@ -106,7 +106,9 @@ func realRigSeeded(t *testing.T, seed func(t *testing.T, ks storage.Keyspace)) *
 	if err := x.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	g := newRig(t, func(d *Deps) { d.Client, d.Approver, d.Runs, d.Definitions = x, x, stores.Runs, all })
+	g := newRig(t, func(d *Deps) {
+		d.Client, d.Approver, d.Runs, d.Definitions, d.Counts = x, x, stores.Runs, all, executor.VisibleCounts(x)
+	})
 	return g
 }
 

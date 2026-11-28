@@ -69,10 +69,14 @@ type Deps struct {
 	Client tasks.Client
 	// Approver is Executor.Approve (the Fixer approval; the Client has none).
 	Approver Approver
-	// Runs reads what the Client does not return: counts, a plan's rows and a
-	// run's item outcomes. tasks.RunStore satisfies it. The routes call it
-	// only after Client.Get proved the caller may view the run.
+	// Runs reads what the Client does not return: a plan's rows and a run's
+	// item outcomes. tasks.RunStore satisfies it. The routes call it only
+	// after Client.Get proved the caller may view the run.
 	Runs RunReader
+	// Counts is the census GET /counts serves: the runs by state that the
+	// caller may view (executor.VisibleCounts). Required: a raw store census
+	// would count runs the caller gets 404 for.
+	Counts Counter
 	// Definitions are every registered kind: the listing, the per-definition
 	// permissions and the schedule keys come from them.
 	Definitions []tasks.Definition
@@ -98,6 +102,7 @@ var (
 	errNoClient    = errors.New("taskhttp: Deps.Client is required")
 	errNoApprover  = errors.New("taskhttp: Deps.Approver is required")
 	errNoRuns      = errors.New("taskhttp: Deps.Runs is required")
+	errNoCounts    = errors.New("taskhttp: Deps.Counts is required")
 	errNoConfig    = errors.New("taskhttp: Deps.Config is required")
 	errNoAudit     = errors.New("taskhttp: Deps.Audit is required (approve, decide and cancel are audited)")
 	errNilDef      = errors.New("taskhttp: a nil Definition in Deps.Definitions")
@@ -124,6 +129,7 @@ func New(d Deps) (*Server, error) {
 		{d.Client == nil, errNoClient},
 		{d.Approver == nil, errNoApprover},
 		{d.Runs == nil, errNoRuns},
+		{d.Counts == nil, errNoCounts},
 		{d.Config == nil, errNoConfig},
 		{d.Audit == nil, errNoAudit},
 	} {

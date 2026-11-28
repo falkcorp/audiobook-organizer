@@ -108,6 +108,46 @@ func (e *executor) Log(ctx context.Context, id tasks.RunID, q tasks.PageQuery) i
 	}
 }
 
+// VisibleCounts returns x's run census as a caller sees it: the runs in each
+// state that the caller may view, so the counts never name a run that Get,
+// Runs and Timeline hide (a View-gated kind's runs, a kind with no usable
+// snapshot). It is a func because tasks.Client has no counts method and is not
+// widened for one: the kernel hands it to taskhttp.Deps.Counts, as it hands
+// Schedules(x) to the scheduler. For an x this package did not build the func
+// refuses (closed).
+//
+// Visibility is decided once per kind, from the store's per-kind census, never
+// once per run: a table of any size costs one pass over two keys-only indexes
+// and one permission check for each kind that has a run.
+func VisibleCounts(x tasks.Executor) func(ctx context.Context) (map[tasks.RunState]int64, error) {
+	e, ok := x.(*executor)
+	if !ok {
+		return func(context.Context) (map[tasks.RunState]int64, error) {
+			return nil, errors.New("executor: VisibleCounts of an executor this package did not build")
+		}
+	}
+	return e.visibleCounts
+}
+
+func (e *executor) visibleCounts(ctx context.Context) (map[tasks.RunState]int64, error) {
+	_, who := e.caller(ctx)
+	byKind, err := e.runs.CountsByKind(ctx)
+	if err != nil {
+		return nil, err
+	}
+	v := e.viewer(ctx, who)
+	out := map[tasks.RunState]int64{}
+	for kind, byState := range byKind {
+		if !v.may(kind) {
+			continue
+		}
+		for st, n := range byState {
+			out[st] += n
+		}
+	}
+	return out, nil
+}
+
 // PauseState implements tasks.Client.PauseState.
 func (e *executor) PauseState(ctx context.Context) (tasks.Pause, bool, error) {
 	return e.opts.Stores.Pause.Get(ctx)

@@ -232,9 +232,10 @@ func (s *Server) getLog(w http.ResponseWriter, r *http.Request, p *auth.Principa
 	s.writeJSON(w, http.StatusOK, map[string]any{"lines": lines})
 }
 
-// getCounts: GET /counts (core:tasks.view): runs by state.
+// getCounts: GET /counts (core:tasks.view): the runs by state that the caller
+// may view. The total is the sum of the same census, never a separate count.
 func (s *Server) getCounts(w http.ResponseWriter, r *http.Request, _ *auth.Principal) {
-	c, err := s.d.Runs.Counts(r.Context())
+	c, err := s.d.Counts(r.Context())
 	if err != nil {
 		s.fail(w, r, err)
 		return

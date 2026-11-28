@@ -342,3 +342,50 @@ func (s *Store) StateCounts(ctx context.Context) (map[string]int64, error) {
 	}
 	return out, nil
 }
+
+// KindStateCounts counts the runs of each kind in each state: the census
+// StateCounts takes, split by kind, derived from the same two keys-only
+// indexes (ix/kind/ and ix/state/), so it needs no key family of its own and
+// no backfill. A run's kind never changes, so the kind index is read first
+// into an id -> kind map and the state index second: a run created between
+// the two scans has no kind yet and is left out (the count is as of the first
+// scan), a run pruned between them has no state entry and is not counted. An
+// ID the state index names and the kind index does not is exactly the first
+// case, never a record to guess a kind for. The map holds one entry per
+// stored run for the length of the call.
+func (s *Store) KindStateCounts(ctx context.Context) (map[string]map[string]int64, error) {
+	kindOf := map[string]string{}
+	kp := keys.Prefix(keys.Str(famIndex), keys.Str(ixKind))
+	for kv, err := range s.ks.Scan(ctx, storage.ScanOptions{Start: kp, End: keys.PrefixEnd(kp), KeysOnly: true}) {
+		if err != nil {
+			return nil, err
+		}
+		kind, id, err := ParseKindIndexKey(kv.Key)
+		if err != nil {
+			return nil, err
+		}
+		kindOf[id] = kind
+	}
+	out := map[string]map[string]int64{}
+	sp := StateIndexPrefix("")
+	for kv, err := range s.ks.Scan(ctx, storage.ScanOptions{Start: sp, End: keys.PrefixEnd(sp), KeysOnly: true}) {
+		if err != nil {
+			return nil, err
+		}
+		state, id, err := ParseStateIndexKey(kv.Key)
+		if err != nil {
+			return nil, err
+		}
+		kind, ok := kindOf[id]
+		if !ok {
+			continue
+		}
+		byState := out[kind]
+		if byState == nil {
+			byState = map[string]int64{}
+			out[kind] = byState
+		}
+		byState[state]++
+	}
+	return out, nil
+}

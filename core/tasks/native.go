@@ -613,6 +613,24 @@ func (r *nativeRuns) Counts(ctx context.Context) (map[RunState]int64, error) {
 	return out, nil
 }
 
+// CountsByKind implements RunStore.CountsByKind from the kind and state
+// indexes.
+func (r *nativeRuns) CountsByKind(ctx context.Context) (map[Kind]map[RunState]int64, error) {
+	raw, err := r.st.KindStateCounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[Kind]map[RunState]int64, len(raw))
+	for k, byState := range raw {
+		m := make(map[RunState]int64, len(byState))
+		for s, n := range byState {
+			m[RunState(s)] = n
+		}
+		out[Kind(k)] = m
+	}
+	return out, nil
+}
+
 // AppendEvent implements RunStore.AppendEvent.
 func (r *nativeRuns) AppendEvent(ctx context.Context, b *storage.Batch, id RunID, seq uint64, e RunEvent) error {
 	if _, err := r.openRun(ctx, b, id, false); err != nil {
