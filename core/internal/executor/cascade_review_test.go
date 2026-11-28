@@ -211,11 +211,9 @@ func TestCancelCascade_ARepeatCancelIsBoundedByItsOwnCaller(t *testing.T) {
 			r := newReachRigHeld(t)
 			var wg sync.WaitGroup
 			for _, who := range []string{"gordon", "harley"} {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+				wg.Go(func() {
 					_ = r.h.x.Cancel(asUser(who, scopeGothamRun), r.parent)
-				}()
+				})
 			}
 			wg.Wait()
 			stored := r.h.get(r.parent).CancelReach
@@ -254,6 +252,20 @@ func TestCancelCascade_ARepeatCancelIsBoundedByItsOwnCaller(t *testing.T) {
 		}
 		if got := rep.Skipped(); len(got) != 1 || got[0] != r.armory {
 			t.Errorf("report names %v, want the armory %s", got, r.armory)
+		}
+		// What the repeat ended carries the verdict the first cancel stored, not the
+		// repeat caller's narrower one: the guard and the boot pass judge a later
+		// descendant by the original authority.
+		for name, id := range map[string]tasks.RunID{"yard": r.yard, "annex": r.annex} {
+			if got := r.h.get(id).CancelReach; got == nil || !got.All {
+				t.Errorf("the %s ended by the repeat carries %+v, want the stored All", name, got)
+			}
+		}
+		// A vault-kind grandchild enqueued under the annex after all this is ended at
+		// dispatch: harley's own verdict does not list the vault kinds.
+		late := r.late(r.h, r.annex, "gotham.safe", "gordon")
+		if got := r.h.waitState(late, tasks.StateCanceled); got.Reason != reasonCancel {
+			t.Errorf("the late safe is %s/%q, want canceled/cancel", got.State, got.Reason)
 		}
 	})
 }

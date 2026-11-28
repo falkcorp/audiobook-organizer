@@ -180,7 +180,13 @@ func (e *executor) cancelDescendants(ctx context.Context, root tasks.RunID, by t
 				return nil
 			})
 		}
-		_ = g.Wait() // every job returns nil: its error is in errs
+		// Every job returns nil (its error goes to errs, so one failure does not hide
+		// the others); a non-nil Wait is kept rather than dropped in case that changes.
+		if err := g.Wait(); err != nil {
+			mu.Lock()
+			errs = append(errs, err)
+			mu.Unlock()
+		}
 		level = next
 	}
 	if len(skipped) > 0 {
