@@ -927,9 +927,13 @@ class P6Base(unittest.TestCase):
         )
         mk = mk.replace("$(DB_OR)", "$(DEPLOY_DB)")
         (work / "Makefile").write_text(mk)
+        helper = work / "deploy" / "rollback-helpers" / "rollback_helper.py"
+        helper.parent.mkdir(parents=True)
+        helper.write_text("# the bundle of the pinned commit\n")
+        self.pin_helper_sha = sha(helper.read_bytes())
         git = ["git", "-C", str(work), "-c", "user.name=Alfred", "-c", "user.email=a@wayne.invalid"]
         subprocess.run([*git[:3], "init", "-q", "-b", "main"], check=True)
-        subprocess.run([*git, "add", "Makefile"], check=True)
+        subprocess.run([*git, "add", "Makefile", "deploy"], check=True)
         subprocess.run([*git, "commit", "-q", "-m", "batcave"], check=True)
         self.pin = subprocess.run(
             [*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True
@@ -946,13 +950,26 @@ class P6Base(unittest.TestCase):
             )
             + self.PRE_EXTRA.format(state=self.state, export=self.export_dir)
         )
+        # The helper bundle installed on the host before P6.
+        self.libdir = r / "libdir"
+        self.libdir.mkdir()
+        self.installed_helper = self.libdir / "rollback_helper.py"
+        self.installed_helper.write_text("# the bundle installed before P6\n")
         self.script = script_copy(
             self.box.scripts,
             self.SCRIPT,
             PIN=self.pin,
             CONF=str(self.conf),
             REPO=str(self.origin),
+            **self.EXTRA_SUBS(),
         )
+
+    def EXTRA_SUBS(self) -> dict[str, str]:
+        return {"LIBDIR": str(self.libdir)} if self.SCRIPT == "r2-p6-reinstall.sh" else {}
+
+    @property
+    def saved(self) -> Path:
+        return self.box.home / "aorg-owner" / "p6-before"
 
     PRE_EXTRA = ""
 
@@ -976,7 +993,9 @@ class P6Base(unittest.TestCase):
         return self.installlog.read_text().splitlines() if self.installlog.exists() else []
 
     def grants(self, stubs) -> None:
-        lines = [f'    (root) NOPASSWD: {LIBDIR_REAL}/{s} ""' for s in stubs]
+        # The host's own grants are always in a real listing; an empty one is a different case.
+        lines = [f'    (root) NOPASSWD: {LIBDIR_REAL}/restore-offline "" ']
+        lines += [f'    (root) NOPASSWD: {LIBDIR_REAL}/{s} ""' for s in stubs]
         (self.box.shims / "sudo-l").write_text("\n".join(lines) + "\n")
 
 
@@ -1030,6 +1049,57 @@ class ReinstallScript(P6Base):
             self.assertIn(f"ok: sudoers grants {s} with no arguments", p.stdout)
         # Run again: still fine.
         self.assertEqual(self.run_script().returncode, 0)
+
+    def test_the_pre_p6_state_is_saved_once_before_the_install(self) -> None:
+        self.after_conf()
+        self.grants(())
+        before_conf = self.conf.read_text()
+        want = sha(self.installed_helper.read_bytes())
+        p = self.run_script("--dry-run")
+        self.assertEqual(p.returncode, 0, text(p))
+        self.assertFalse(self.saved.exists(), "a dry run saves nothing")
+        self.assertIn("a real run saves the pre-P6 state", p.stdout)
+        self.grants(STUBS)
+        before_sudo_l = (self.box.shims / "sudo-l").read_text()
+        p = self.run_script()
+        self.assertEqual(p.returncode, 0, text(p))
+        self.assertEqual((self.saved / "helper.sha256").read_text().strip(), want)
+        self.assertEqual((self.saved / "rollback.conf").read_text(), before_conf)
+        self.assertEqual((self.saved / "sudo-l.txt").read_text(), before_sudo_l)
+        self.assertTrue((self.saved / "complete").exists())
+        self.assertEqual(stat.S_IMODE(self.saved.stat().st_mode), 0o700)
+        for name in ("helper.sha256", "rollback.conf", "sudo-l.txt"):
+            self.assertEqual(stat.S_IMODE((self.saved / name).stat().st_mode), 0o600, name)
+        self.assertEqual(
+            [q.name for q in self.saved.parent.glob("p6-before.tmp.*")], [], "no temp left over"
+        )
+        # A rerun, after P6 changed both the conf and the helper, keeps the first save.
+        self.installed_helper.write_text("# the bundle P6 installed\n")
+        again = self.run_script()
+        self.assertEqual(again.returncode, 0, text(again))
+        self.assertIn("already saved by an earlier run: kept", again.stdout)
+        self.assertEqual((self.saved / "helper.sha256").read_text().strip(), want)
+        self.assertEqual((self.saved / "rollback.conf").read_text(), before_conf)
+        # And a dry run after a save says it will be kept.
+        self.assertIn("already saved", self.run_script("--dry-run").stdout)
+
+    def test_a_helper_that_is_not_installed_is_saved_as_absent(self) -> None:
+        self.after_conf()
+        self.grants(STUBS)
+        self.installed_helper.unlink()
+        self.assertEqual(self.run_script().returncode, 0)
+        self.assertEqual((self.saved / "helper.sha256").read_text().strip(), "absent")
+
+    def test_an_incomplete_save_is_not_trusted_or_overwritten(self) -> None:
+        self.after_conf()
+        self.grants(STUBS)
+        self.saved.mkdir(mode=0o700)
+        (self.saved / "rollback.conf").write_text("half")
+        p = self.run_script()
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("is not a complete save", p.stderr)
+        self.assertEqual([i for i in self.installs() if i.startswith("APPLY=1")], [])
+        self.assertEqual((self.saved / "rollback.conf").read_text(), "half")
 
     def test_each_check_fails_the_run(self) -> None:
         for label, setup in {
@@ -1112,6 +1182,18 @@ class UndoScript(P6Base):
         super().setUp()
         self.export_dir.mkdir(mode=0o700)
         self.undone()
+        self.save_before()
+        self.grants(())  # a real listing: the host's own grants, none of the four
+
+    def save_before(self, sha_: str | None = None, conf: str | None = None) -> None:
+        """What r2-p6-reinstall.sh saved: the helper hash of the PIN checkout, the
+        pre-P6 rollback.conf (what the undo should restore) and the sudo -l text."""
+        shutil.rmtree(self.saved, ignore_errors=True)
+        self.saved.mkdir(mode=0o700)
+        (self.saved / "helper.sha256").write_text((sha_ or self.pin_helper_sha) + "\n")
+        (self.saved / "rollback.conf").write_text(conf or self.after.read_text())
+        (self.saved / "sudo-l.txt").write_text("")
+        (self.saved / "complete").write_text("")
 
     def undone(self, offline: str | None = None, export: bool = False) -> None:
         body = re.sub(r"^(offline_env|export_dir).*\n", "", self.conf.read_text(), flags=re.M)
@@ -1149,10 +1231,80 @@ class UndoScript(P6Base):
         for s in STUBS:
             self.assertIn(f"sudoers no longer grants {s}", p.stdout)
         self.assertEqual(len(self.installs()), 2)
-        # Again, with the directory already gone and the conf already undone.
-        self.undone()
-        self.conf.write_text(self.after.read_text())
-        self.assertEqual(self.run_script().returncode, 0)
+        # Again after a success: the save was retired, so there is nothing to put back.
+        again = self.run_script()
+        self.assertNotEqual(again.returncode, 0, text(again))
+        self.assertIn("no saved pre-P6 state", again.stderr)
+
+    def test_a_checkout_that_is_not_the_commit_p6_replaced_is_refused_before_anything(self) -> None:
+        for label, sha_, why in (
+            ("another commit's helper", sha(b"# some other bundle\n"), "is not the one installed before P6"),
+            ("no helper was installed", "absent", "no previous bundle to put back"),
+        ):
+            self.save_before(sha_=sha_)
+            for flags in ((), ("--dry-run",)):
+                p = self.run_script(*flags)
+                self.assertNotEqual(p.returncode, 0, f"{label} {flags}\n{text(p)}")
+                self.assertIn(why, p.stderr, label)
+                self.assertEqual(self.installs(), [], label)
+                self.assertEqual(self.box.sudo_calls(), [], label)
+        self.assertTrue(self.export_dir.is_dir())
+
+    def test_no_saved_state_means_nothing_to_put_back(self) -> None:
+        shutil.rmtree(self.saved)
+        p = self.run_script("--dry-run")
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("no saved pre-P6 state", p.stderr)
+        self.assertEqual(self.installs(), [])
+        self.save_before()
+        (self.saved / "complete").unlink()
+        self.assertNotEqual(self.run_script("--dry-run").returncode, 0)
+
+    def test_a_listing_that_is_empty_or_lacks_the_hosts_own_grants_is_not_proof(self) -> None:
+        for label, body in (
+            ("empty", ""),
+            ("no restore-offline", f'    (root) NOPASSWD: {LIBDIR_REAL}/inflight-probe ""\n'),
+        ):
+            self.run_with_listing(body)
+            p = self.last
+            self.assertNotEqual(p.returncode, 0, f"{label}\n{text(p)}")
+            self.assertIn("CANNOT TELL", p.stdout, label)
+            self.assertIn("send this output to the agents", p.stderr, label)
+            self.undone()
+            self.save_before()
+            self.export_dir.mkdir(mode=0o700, exist_ok=True)
+
+    def run_with_listing(self, body: str) -> None:
+        """Run the script with this exact `sudo -n -l` text (run_script's own
+        helper would replace it)."""
+        extra = {
+            "INSTALL_LOG": str(self.installlog),
+            "AFTER_CONF": str(self.after),
+            "CONF_PATH": str(self.conf),
+        }
+        (self.box.shims / "sudo-l").write_text(body)
+        self.last = self.box.run(self.script, extra=extra)
+
+    def test_a_restored_conf_that_differs_from_the_saved_one_fails_with_the_diff(self) -> None:
+        self.save_before(conf=self.after.read_text() + "# a line the old file had\n")
+        p = self.run_script()
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("a line the old file had", p.stdout)
+        self.assertIn("differs from the copy saved before P6", p.stdout)
+        self.assertIn("send this output to the agents", p.stderr)
+        self.assertTrue(self.saved.exists(), "a failed undo keeps the save")
+        # Safe to run again after a failure: once the saved copy matches, it passes.
+        self.save_before()
+        again = self.run_script()
+        self.assertEqual(again.returncode, 0, text(again))
+
+    def test_a_good_undo_says_the_conf_is_what_it_was_and_retires_the_save(self) -> None:
+        p = self.run_script()
+        self.assertEqual(p.returncode, 0, text(p))
+        self.assertIn("rollback.conf is what it was before P6", p.stdout)
+        self.assertFalse(self.saved.exists())
+        (retired,) = self.saved.parent.glob("p6-before.undone-*")
+        self.assertTrue((retired / "complete").exists())
 
     def test_a_non_empty_export_directory_is_left_with_a_note(self) -> None:
         (self.export_dir / "aorg-cutover-blockers-request.json").write_text("{}")

@@ -16,6 +16,12 @@
 # It asks for the sudo password once (the installer runs as root). Safe to run
 # again: every step checks before it acts, and the installer is idempotent.
 #
+# Before the install it saves what P6 replaces, once, in ~/aorg-owner/p6-before/
+# (mode 0700): the sha256 of the installed rollback_helper.py, a copy of
+# rollback.conf, and the text of `sudo -n -l`. r2-p6-undo.sh puts the previous
+# bundle back and refuses unless its checkout is the one whose helper has that
+# hash. A rerun keeps the saved copy; it never overwrites it with the P6 state.
+#
 #   --dry-run   do everything except the sudo install (the installer's own
 #               dry run); this is what the agents run before handing it over.
 #
@@ -26,6 +32,8 @@ set -euo pipefail
 PIN="__PIN__"   # the main commit that carries #5052 and the cutover-blockers PR
 SRC="$HOME/aorg-owner/src"
 EXPORT_DIR="$HOME/aorg-owner/export"
+SAVED="$HOME/aorg-owner/p6-before"
+LIBDIR=/usr/local/libexec/audiobook-organizer/rollback
 CONF=/etc/audiobook-organizer/rollback.conf
 UNIT_NAME=audiobook-organizer.service
 REPO=https://github.com/falkcorp/audiobook-organizer.git
@@ -92,8 +100,35 @@ make -C "$SRC" --no-print-directory install-rollback-helpers REPLACE_CONF=1 \
   DEPLOY_BIN="$BIN" DEPLOY_DB="$DB" DEPLOY_UNIT="$UNIT" ROLLBACK_INSTALL_ARGS="$ARGS"
 
 if [ "$DRY" -eq 1 ]; then
+  if [ -e "$SAVED/complete" ]; then
+    echo "    the pre-P6 state is already saved in $SAVED; a real run keeps it"
+  else
+    echo "    a real run saves the pre-P6 state in $SAVED first (helper hash, rollback.conf, sudo -l)"
+  fi
   say "dry run only: nothing was installed"
   exit 0
+fi
+
+# The pre-P6 state, saved once: what r2-p6-undo.sh checks its checkout against and
+# diffs the restored rollback.conf with. An earlier save is never overwritten.
+say "saving the pre-P6 state in $SAVED"
+if [ -e "$SAVED/complete" ]; then
+  echo "    already saved by an earlier run: kept"
+else
+  [ ! -e "$SAVED" ] && [ ! -L "$SAVED" ] || fail "$SAVED exists but is not a complete save; look at it, move it away, and run this again"
+  TMPSAVE=$(mktemp -d "$SAVED.tmp.XXXXXX")
+  if [ -r "$LIBDIR/rollback_helper.py" ]; then
+    sha256sum -- "$LIBDIR/rollback_helper.py" | cut -d' ' -f1 > "$TMPSAVE/helper.sha256"
+  else
+    echo absent > "$TMPSAVE/helper.sha256"
+  fi
+  [ -s "$TMPSAVE/helper.sha256" ] || fail "could not hash the installed helper"
+  install -m 600 -- "$CONF" "$TMPSAVE/rollback.conf"
+  (sudo -n -l 2>/dev/null || true) > "$TMPSAVE/sudo-l.txt"
+  chmod 600 "$TMPSAVE/helper.sha256" "$TMPSAVE/sudo-l.txt"
+  touch "$TMPSAVE/complete"
+  mv -- "$TMPSAVE" "$SAVED"
+  echo "    saved: helper sha256 $(cat "$SAVED/helper.sha256"), rollback.conf, sudo -l"
 fi
 
 # 5. The install (sudo), then proof it took.
