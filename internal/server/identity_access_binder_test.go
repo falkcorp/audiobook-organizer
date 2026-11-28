@@ -107,6 +107,9 @@ type accessBinderFixture struct {
 	// marked is whether the last /api/v1 or /api/v3 request left the verified
 	// marker set, read after the whole chain ran.
 	marked bool
+	// throttleKey is loginThrottleKey for the same request, read at the same
+	// point: the per-visitor bucket the login throttle and ceiling charge.
+	throttleKey string
 }
 
 // newAccessBinderFixture is an identity server with the Access verifier
@@ -121,11 +124,30 @@ func newAccessBinderFixture(t *testing.T) *accessBinderFixture {
 // every resolve and write when admit is set.
 func newAccessBinderFixtureWith(t *testing.T, admit bool) *accessBinderFixture {
 	t.Helper()
+	return newAccessBinderFixtureOpts(t, accessBinderOpts{admit: admit, allowed: binderEmail})
+}
+
+// accessBinderOpts shapes an access binder fixture: whether the store admits
+// (accessBinderStore.admit), books' snapshot allow-list (OAuthAllowedEmails,
+// the list HEAD's binder and the login-ceiling exemption read), and the
+// assertions books' verifier accepts besides alfred's.
+type accessBinderOpts struct {
+	admit   bool
+	allowed string
+	extra   fakeAccessVerifier
+}
+
+func newAccessBinderFixtureOpts(t *testing.T, o accessBinderOpts) *accessBinderFixture {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	setTunnelConnectors(t, "")
-	cfAccessVerifierOverride = fakeAccessVerifier{
+	v := fakeAccessVerifier{
 		binderAlfredJWT: {Provider: legacyoauth.ProviderCFAccess, Subject: "cf|alfred", Email: binderEmail, EmailVerified: true},
 	}
+	for k, c := range o.extra {
+		v[k] = c
+	}
+	cfAccessVerifierOverride = v
 	t.Cleanup(func() { cfAccessVerifierOverride = nil })
 	orig := config.AppConfig
 	t.Cleanup(func() { config.AppConfig = orig })
@@ -133,13 +155,13 @@ func newAccessBinderFixtureWith(t *testing.T, admit bool) *accessBinderFixture {
 		DatabaseType:       "pebble",
 		RootDir:            t.TempDir(),
 		EnableAuth:         true,
-		OAuthAllowedEmails: binderEmail,
+		OAuthAllowedEmails: o.allowed,
 	}
 	pebble, err := database.NewPebbleStoreInMemory(t.TempDir() + "/access-binder.pebble")
 	require.NoError(t, err)
 	t.Cleanup(func() { pebble.Close() })
 	fx := &accessBinderFixture{
-		store:  &accessBinderStore{Store: pebble, admit: admit},
+		store:  &accessBinderStore{Store: pebble, admit: o.admit},
 		alfred: &database.User{ID: "u-alfred", Username: "alfred", Email: binderEmail, Status: "active"},
 	}
 	// Read the marker after the rest of the chain: the hook runs first in the
@@ -148,6 +170,7 @@ func newAccessBinderFixtureWith(t *testing.T, admit bool) *accessBinderFixture {
 	apiGroupHookForTest = func(c *gin.Context) {
 		c.Next()
 		fx.marked = cfaccess.CFAccessVerified(c)
+		fx.throttleKey = loginThrottleKey(c)
 	}
 	t.Cleanup(func() { apiGroupHookForTest = nil })
 	id := adoptIdentity(t, []string{"library.view"}, nil, nil, fx.alfred)
