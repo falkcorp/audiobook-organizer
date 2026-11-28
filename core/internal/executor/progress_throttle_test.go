@@ -356,3 +356,52 @@ func TestExecutor_ALateFlushDefersToTheWindowsWrite(t *testing.T) {
 		h.drained()
 	})
 }
+
+// TestExecutor_AFlushThatFiredBeforeTheCloseWritesNothing: a timer that had
+// already fired when stopFlush ran (Timer.Stop reports false; the callback
+// waits on the writer) finds the attempt closed and writes nothing, even with
+// the state still dirty past the window. On the Goexit path nothing else
+// clears pDirty (finish never ran), so flushTrailing's own pClosed check is
+// the only thing between that callback and a write after the attempt ended.
+// The interleaving is staged on the attempt: stopFlush, then the callback.
+func TestExecutor_AFlushThatFiredBeforeTheCloseWritesNothing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		gate := make(chan struct{})
+		p := &tape{}
+		h := tapeHarness(t, p, []tasks.Definition{
+			taskDef("gotham.fired", func(rc *tasks.RC, _ noParams) (string, error) {
+				rc.Progress().Set(1, tasks.Known(3))
+				<-gate
+				return "done", nil
+			}, readOnly("gotham.fired")),
+		}, realIntervalConfig, false)
+		id := h.start("gotham.fired", tasks.StartRequest{})
+		synctest.Wait()
+		h.e.mu.Lock()
+		a := h.e.running[id]
+		h.e.mu.Unlock()
+		if a == nil {
+			t.Fatal("the run is not live")
+		}
+		advance(1500 * time.Millisecond) // past the window: a flush would be due
+		a.pmu.Lock()
+		a.pDirty = true // an in-window update the fired timer was meant to publish
+		a.pmu.Unlock()
+		before := len(progressWrites(p, id))
+		a.stopFlush()
+		a.flushTrailing() // the callback that was already running
+		synctest.Wait()
+		a.pmu.Lock()
+		rearmed := a.pTimer != nil
+		a.pmu.Unlock()
+		if got := len(progressWrites(p, id)); got != before {
+			t.Fatalf("a flush that fired before the close wrote after it: %d writes, want %d", got, before)
+		}
+		if rearmed {
+			t.Fatal("a flush that fired before the close re-armed a closed attempt")
+		}
+		close(gate)
+		h.waitState(id, tasks.StateSucceeded)
+		h.drained()
+	})
+}
