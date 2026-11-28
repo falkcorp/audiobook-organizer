@@ -304,8 +304,17 @@ func TestCoRequirement_EveryEntryOfANameCarriesIt(t *testing.T) {
 // the same RouteInfo and generate the same OpenAPI document, so an app that
 // declares none is unaffected.
 func TestCoRequirement_EmptyMapChangesNothing(t *testing.T) {
-	base, err := cqBuild(t, nil)
-	if err != nil {
+	// base is built with NO CoRequirements option at all: the options literal
+	// below never names the field, so it is not the same code path as the
+	// router under test, which is given a nil or an empty map.
+	base := &cqRig{audit: &raAudit{}}
+	base.r = NewRouter(Options{OpenAPI: OpenAPIOptions{Version: "1.0.0", CookieName: "hello_session"}}, Deps{})
+	if err := base.r.SetAuth(AuthWiring{Service: &cqAuthn{cat: s13Catalog(t)}, Catalog: s13Catalog(t), Audit: base.audit}); err != nil {
+		t.Fatalf("SetAuth: %v", err)
+	}
+	base.cqRoutes(base.r)
+	var err error
+	if base.h, err = base.r.Build(); err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	for name, co := range map[string]map[string]rbac.Requirement{"nil": nil, "empty": {}} {
@@ -323,6 +332,31 @@ func TestCoRequirement_EmptyMapChangesNothing(t *testing.T) {
 					if an, bn := cqNoRequestID(a.Body.String()), cqNoRequestID(b.Body.String()); a.Code != b.Code || an != bn {
 						t.Errorf("%s %s as %q: %d %s, want %d %s", route.method, route.path, as, b.Code, bn, a.Code, an)
 					}
+				}
+			}
+			// Every route, one by one: the displayed requirement is the
+			// route's own, the recorded RouteInfo has none, no co is set.
+			if len(rg.r.routes) == 0 || len(rg.r.routes) != len(base.r.routes) {
+				t.Fatalf("%d routes, want %d (and not none)", len(rg.r.routes), len(base.r.routes))
+			}
+			for _, e := range rg.r.routes {
+				if got := e.perm(); got.String() != e.info.Perm.String() || got.Kind() != e.info.Perm.Kind() {
+					t.Errorf("%s: perm() = %s, want its own %s", e.info.Name, got, e.info.Perm)
+				}
+				if !e.co.IsZero() || !e.info.CoPerm.IsZero() {
+					t.Errorf("%s carries co %s / %s with no map", e.info.Name, e.co, e.info.CoPerm)
+				}
+			}
+			own := map[string]string{}
+			for _, e := range base.r.routes {
+				own[e.info.Name] = e.info.Perm.String()
+			}
+			for ri := range rg.r.Routes() {
+				if ri.Kind != RouteKindNative && ri.Kind != RouteKindRaw {
+					continue
+				}
+				if !ri.CoPerm.IsZero() || ri.Perm.String() != own[ri.Name] {
+					t.Errorf("Routes(): %s reports Perm %s CoPerm %s, want %s and none", ri.Name, ri.Perm, ri.CoPerm, own[ri.Name])
 				}
 			}
 			var want, got []string
@@ -725,4 +759,60 @@ func TestCoRequirement_RefusesRiskyCoScopes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCoRequirement_AdminIsNotLockedOut pins the other half of "narrowing
+// only": the co-requirement must not turn an administrator away. On the B3-a
+// shape (own core:integrations.manage, co books:integrations.manage), every
+// way of being core:admin is admitted, the auth-disabled principal is
+// answered as it is with no map, and an admin's key narrowed to the core scope
+// alone is refused naming the co-scope, because a narrowed key deliberately
+// holds less than its owner.
+func TestCoRequirement_AdminIsNotLockedOut(t *testing.T) {
+	cat := s13Catalog(t)
+	with, err := cqBuild(t, cqCoReq("manageThing", rbac.Need(cqBooks)))
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	without, err := cqBuild(t, nil)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	for _, c := range []struct {
+		name string
+		p    *auth.Principal
+		want int
+	}{
+		{"admin session", s13Session(cat, rbac.CoreAdmin), http.StatusOK},
+		{"admin delegated session (temp login)", s13Delegated(cat, rbac.CoreAdmin), http.StatusOK},
+		{"owner-assurance extension sign-in holding core:admin", s13Owner(cat, rbac.CoreAdmin), http.StatusOK},
+		{"admin API key naming core:admin", s13Key(cat, []rbac.Permission{rbac.CoreAdmin}, rbac.CoreAdmin), http.StatusOK},
+		{"role core:*", s13Session(cat, "core:*"), http.StatusOK},
+		{"role core:admin.*", s13Session(cat, "core:admin.*"), http.StatusOK},
+		{"auth-disabled principal", s13AuthOff(cat), http.StatusOK},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, base := with.doAs(http.MethodPost, "/manage", c.p), without.doAs(http.MethodPost, "/manage", c.p)
+			t.Logf("with the co-requirement %d, with no map %d", got.Code, base.Code)
+			if got.Code != c.want {
+				t.Errorf("with the co-requirement: %d %s, want %d", got.Code, got.Body, c.want)
+			}
+			if got.Code > base.Code {
+				t.Errorf("the co-requirement answered %d where no map answered %d", got.Code, base.Code)
+			}
+		})
+	}
+	t.Run("an admin's key narrowed to the core scope alone", func(t *testing.T) {
+		p := s13Key(cat, []rbac.Permission{rbac.CoreAdmin}, cqCore)
+		if rec := without.doAs(http.MethodPost, "/manage", p); rec.Code != http.StatusOK {
+			t.Fatalf("with no map the narrowed key got %d, want 200 (the premise of the cell)", rec.Code)
+		}
+		rec := with.doAs(http.MethodPost, "/manage", p)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("narrowed key: %d %s, want 403", rec.Code, rec.Body)
+		}
+		if pr := s13Problem(t, rec); pr.Code != "permission_denied" || pr.Required != string(cqBooks) {
+			t.Errorf("problem %q requires %q, want permission_denied requiring %q", pr.Code, pr.Required, cqBooks)
+		}
+	})
 }
