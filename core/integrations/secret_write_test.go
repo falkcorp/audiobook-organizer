@@ -127,7 +127,9 @@ func TestPut_SecretWriteRefusedForManagerWithoutAdmin(t *testing.T) {
 }
 
 // The auth-disabled principal never passes ProtectAdmin, so it cannot store a
-// secret either (HEAD's auth-off method is not interactive).
+// secret either. HEAD refuses the same write: with auth off no user holds the
+// admin role (config_handler.go configCan reads core:admin from the signed-in
+// user's roles), and there is no first-run grant under core identity.
 func TestPut_SecretWriteRefusedForAuthOff(t *testing.T) {
 	e := newEnv(t)
 	r := e.registry(t, nil, nil)
