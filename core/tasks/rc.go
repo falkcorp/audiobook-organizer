@@ -84,10 +84,23 @@ const (
 // AuthMethod it signed in with; a system actor (schedules, the relay, a
 // module's own starts) has System set to the owning module's ID, or "core".
 // The System field is coined by F2-01.
+//
+// CredentialID is the id of the API key the request was made with, for any
+// principal built over a key (core's api_key method and every module compat
+// surface's key principal): "has a CredentialID" means "is key-bound", whatever
+// the AuthMethod says. It is an identifier, never key material and never any
+// part of a secret, and it is never logged at info level. A reader that needs
+// the key's scopes looks the key up by it, so a key revoked or narrowed after
+// the run started ends or narrows the run. It is empty for a session, a
+// system actor, the auth-disabled principal and a principal built over no key,
+// and on a run stored before the field existed. It is not part of the wire
+// form (ActorPayload) and is not part of who the actor is: two actors that
+// differ only in it are the same person acting through different credentials.
 type Actor struct {
-	UserID     string
-	AuthMethod string // session | token | system; never derived from an unsigned header
-	System     string
+	UserID       string
+	AuthMethod   string // session | token | system; never derived from an unsigned header
+	System       string
+	CredentialID string `json:",omitempty"`
 }
 
 // RunRef names a run a start created or folded into.

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/health/diagnostics"
@@ -31,6 +32,38 @@ func (u dwUsers) User(_ context.Context, id auth.UserID) (*auth.User, error) {
 		return x, nil
 	}
 	return nil, auth.ErrNotFound
+}
+
+// dwKeys is a key table. It answers APIKeys with every key it holds whatever
+// the owner asked for, so a key owned by someone else reaches ViewerFor's own
+// owner check instead of being hidden by the store's scoping.
+type dwKeys struct {
+	keys []*auth.APIKey
+	err  error
+	// errThenKeys yields err first and then still yields the keys, as a scan
+	// does when it fails on one record and the caller keeps ranging.
+	errThenKeys bool
+}
+
+func (k *dwKeys) APIKeys(context.Context, auth.UserID) iter.Seq2[*auth.APIKey, error] {
+	return func(yield func(*auth.APIKey, error) bool) {
+		if k.err != nil {
+			if !yield(nil, k.err) || !k.errThenKeys {
+				return
+			}
+		}
+		for _, x := range k.keys {
+			if !yield(x, nil) {
+				return
+			}
+		}
+	}
+}
+
+// dwKey is an active key of owner that expires in a day.
+func dwKey(id, owner string, scopes ...rbac.Permission) *auth.APIKey {
+	return &auth.APIKey{ID: id, Owner: auth.UserID(owner), Name: "batphone", Scopes: scopes, Status: auth.KeyActive,
+		CreatedAt: time.Now().Add(-time.Hour), ExpiresAt: time.Now().Add(24 * time.Hour)}
 }
 
 // dwCompiler is rbac.Service.Compile's shape over the real authz.Compile and
@@ -75,22 +108,24 @@ func dwUser(id string, status auth.UserStatus, roles ...rbac.RoleName) *auth.Use
 // The non-Sensitive core:system.manage is admitted either way.
 func TestDiagnosticsViewerFor_InteractiveOnlyForSession(t *testing.T) {
 	comp := newDWCompiler(t)
-	vf := diagnosticsViewerFor(dwUsers{"bruce": dwUser("bruce", auth.StatusActive, "admin")}, comp)
+	keyScopes := []rbac.Permission{"core:system.manage", "core:backup.restore"}
+	vf := diagnosticsViewerFor(dwUsers{"bruce": dwUser("bruce", auth.StatusActive, "admin")},
+		&dwKeys{keys: []*auth.APIKey{dwKey("key-batphone", "bruce", keyScopes...)}}, comp)
 	for _, c := range []struct {
 		method      string
+		credential  string
 		interactive bool
 	}{
-		{"session", true},
-		{"token", false},
-		{"session_delegated", false},
-		{"auth_disabled", false},
-		{"system", false},
-		{"", false},
-		{"Session", false},
+		{"session", "", true},
+		{"token", "key-batphone", false},
+		{"books.abs", "key-batphone", false}, // a compat surface's key principal: key-bound by its id
+		{"session_delegated", "", false},
+		{"auth_disabled", "", false},
+		{"system", "", false},
 	} {
-		t.Run("method="+c.method, func(t *testing.T) {
+		t.Run("method="+c.method+"/credential="+c.credential, func(t *testing.T) {
 			comp.seen = nil
-			v, err := vf(t.Context(), tasks.Actor{UserID: "bruce", AuthMethod: c.method})
+			v, err := vf(t.Context(), tasks.Actor{UserID: "bruce", AuthMethod: c.method, CredentialID: c.credential})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -103,9 +138,13 @@ func TestDiagnosticsViewerFor_InteractiveOnlyForSession(t *testing.T) {
 			if !v.Can("core:system.manage") {
 				t.Error("an administrator lost core:system.manage")
 			}
-			if len(comp.seen) != 1 || comp.seen[0].Interactive != c.interactive || comp.seen[0].Scopes != nil ||
-				!slices.Equal(comp.seen[0].Roles, []rbac.RoleName{"admin"}) {
-				t.Errorf("compiled %+v, want the user's roles with Interactive=%v", comp.seen, c.interactive)
+			wantScopes := []rbac.Permission(nil)
+			if c.credential != "" {
+				wantScopes = keyScopes // the key's own scopes, and only a key-bound actor carries any
+			}
+			if len(comp.seen) != 1 || comp.seen[0].Interactive != c.interactive || !slices.Equal(comp.seen[0].Scopes, wantScopes) ||
+				(wantScopes == nil) != (comp.seen[0].Scopes == nil) || !slices.Equal(comp.seen[0].Roles, []rbac.RoleName{"admin"}) {
+				t.Errorf("compiled %+v, want the user's roles, scopes %v and Interactive=%v", comp.seen, wantScopes, c.interactive)
 			}
 		})
 	}
@@ -120,7 +159,7 @@ func TestDiagnosticsViewerFor_LiveRolesAndRefusals(t *testing.T) {
 		"selina":  dwUser("selina", auth.StatusPending, "admin"),
 		"_system": dwUser("_system", auth.StatusSystem, "admin"),
 	}
-	vf := diagnosticsViewerFor(users, newDWCompiler(t))
+	vf := diagnosticsViewerFor(users, &dwKeys{}, newDWCompiler(t))
 	session := func(id string) tasks.Actor { return tasks.Actor{UserID: id, AuthMethod: "session"} }
 
 	v, err := vf(t.Context(), session("alfred"))
@@ -143,7 +182,8 @@ func TestDiagnosticsViewerFor_LiveRolesAndRefusals(t *testing.T) {
 			t.Errorf("%s: err = %v, want errNoDiagnosticsViewer", name, err)
 		}
 	}
-	if diagnosticsViewerFor(nil, newDWCompiler(t)) != nil || diagnosticsViewerFor(users, nil) != nil {
+	if diagnosticsViewerFor(nil, &dwKeys{}, newDWCompiler(t)) != nil || diagnosticsViewerFor(users, nil, newDWCompiler(t)) != nil ||
+		diagnosticsViewerFor(users, &dwKeys{}, nil) != nil {
 		t.Error("a nil collaborator did not yield a nil ViewerFor (diagnostics.New must refuse it)")
 	}
 }

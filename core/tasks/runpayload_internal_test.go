@@ -6,7 +6,9 @@
 package tasks
 
 import (
+	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -17,7 +19,7 @@ func fullRunView() RunView {
 	created := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
 	return RunView{
 		ID: "run-nightwing-1", Kind: "batcave.sweep", Mode: ModeLive, State: StateFailed, Held: true,
-		Reason: "the_court_of_owls", Actor: Actor{UserID: "dick", AuthMethod: "session", System: "core.scheduler"},
+		Reason: "the_court_of_owls", Actor: Actor{UserID: "dick", AuthMethod: "token", System: "core.scheduler", CredentialID: "key-batsignal"},
 		Trigger: TriggerManual, Parent: "run-nightwing-0", PlanRef: "run-nightwing-plan",
 		Created: created, Started: created.Add(time.Minute), Finished: created.Add(time.Hour),
 		Done: 3, Total: 9, Current: "Talon's case file",
@@ -51,6 +53,11 @@ func TestFullRunViewSetsEveryField(t *testing.T) {
 	}
 	if z := zeroFields(reflect.ValueOf(NewRunPayload(fullRunView())), ""); len(z) != 0 {
 		t.Errorf("its payload leaves %v zero", z)
+	}
+	// Actor.CredentialID is the one view field the wire form leaves out on
+	// purpose: it is set above and must not appear in the payload.
+	if raw, err := json.Marshal(NewRunPayload(fullRunView())); err != nil || strings.Contains(string(raw), "key-batsignal") {
+		t.Errorf("the payload carries the credential id: %s (%v)", raw, err)
 	}
 }
 

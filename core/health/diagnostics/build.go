@@ -123,7 +123,12 @@ type Config struct {
 	// compile with Interactive set from actor.AuthMethod ("session"), and must
 	// not hand every method the person's interactive checker. A run started by
 	// the route also carries the permissions resolved at request time
-	// (ExportParams.Perms), which can only narrow what ViewerFor returns.
+	// (ExportParams.Perms), which can only narrow what ViewerFor returns. An actor
+	// with a CredentialID is key-bound (whatever its AuthMethod) and ViewerFor
+	// must resolve it through that key as the key is now (a missing, revoked,
+	// expired or another user's key refuses; a narrowed key narrows). One with
+	// none must be a known non-key method; a token actor with no id, or an
+	// unrecognised method, is refused.
 	ViewerFor func(ctx context.Context, actor tasks.Actor) (Viewer, error)
 	Sources   CoreSources
 	// Contributors are the modules' sections (Registrar.Diagnostics).

@@ -46,8 +46,11 @@ type ActorPayload struct {
 }
 
 // NewActorPayload is the wire form of a.
+//
+// It copies the three fields by name rather than converting the struct:
+// Actor.CredentialID is an internal identifier and never goes on the wire.
 func NewActorPayload(a Actor) ActorPayload {
-	return ActorPayload(a)
+	return ActorPayload{UserID: a.UserID, AuthMethod: a.AuthMethod, System: a.System}
 }
 
 // RunPayload is the wire form of a RunView: the payload of
@@ -137,7 +140,7 @@ func redactPayloadWith(p RunPayload, rule func(RunView) RunView) RunPayload {
 func (p RunPayload) runView() RunView {
 	return RunView{
 		ID: RunID(p.ID), Kind: Kind(p.Kind), Mode: modeOf(p.Mode), State: RunState(p.State), Held: p.Held,
-		Reason: p.Reason, Actor: Actor(p.Actor), Trigger: Trigger(p.Trigger), Parent: RunID(p.Parent),
+		Reason: p.Reason, Actor: Actor{UserID: p.Actor.UserID, AuthMethod: p.Actor.AuthMethod, System: p.Actor.System}, Trigger: Trigger(p.Trigger), Parent: RunID(p.Parent),
 		PlanRef: RunID(p.PlanRef), Created: p.Created, Started: p.Started, Finished: p.Finished,
 		Done: p.Done, Total: p.Total, Current: p.Current,
 		Deferred: p.Deferred, BlockedBy: RunID(p.BlockedBy), DeferredSince: p.DeferredSince,

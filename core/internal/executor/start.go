@@ -515,7 +515,7 @@ func (e *executor) stageFold(ctx context.Context, b *storage.Batch, p prepared) 
 		if cur.FinishOnly {
 			continue // it leases no work: a start folded into it would run nothing (HEAD's v3 defs fold nothing into one, registry/finish.go:63-64)
 		}
-		if pol.SameActorOnly && cur.Actor != p.req.Actor {
+		if pol.SameActorOnly && !sameActor(cur.Actor, p.req.Actor) {
 			continue
 		}
 		match := pol.AnyParams || pol.Merge != nil
@@ -574,7 +574,7 @@ func (e *executor) stageFold(ctx context.Context, b *storage.Batch, p prepared) 
 		if cur.Kind != p.d.kind || cur.State != tasks.StateRunning || cur.Mode != p.mode || cur.PlanRef != "" || cur.FinishOnly {
 			continue // a finish-only attempt runs no work for the start either
 		}
-		if pol.SameActorOnly && cur.Actor != p.req.Actor {
+		if pol.SameActorOnly && !sameActor(cur.Actor, p.req.Actor) {
 			continue
 		}
 		if pol.AnyParams || bytes.Equal(cur.Params, p.params) {

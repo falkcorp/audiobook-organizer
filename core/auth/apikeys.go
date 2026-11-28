@@ -83,7 +83,7 @@ func (s *Service) CreateAPIKey(ctx context.Context, actor *Principal, spec KeySp
 	if err != nil {
 		return "", nil, err
 	}
-	if _, isKey := actor.keyRef(); isKey {
+	if _, isKey := actor.KeyRef(); isKey {
 		if owner != self {
 			return "", nil, fmt.Errorf("%w: a key-authenticated caller mints keys only for itself", ErrDenied)
 		}
@@ -154,7 +154,7 @@ func (s *Service) effectiveSet(ctx context.Context, actor *Principal) (rbac.Chec
 	}
 	in := rbac.CheckerInput{Roles: u.Roles, Interactive: s.interactive(actor.Method)}
 	var expiry time.Time
-	if keyID, isKey := actor.keyRef(); isKey {
+	if keyID, isKey := actor.KeyRef(); isKey {
 		k, err := s.d.Store.APIKeyByID(ctx, keyID)
 		if err != nil {
 			return nil, time.Time{}, err
@@ -230,7 +230,7 @@ func (s *Service) SetAPIKeyStatus(ctx context.Context, actor *Principal, id stri
 		if err := s.mayManage(ctx, actor, k.Owner); err != nil {
 			return err
 		}
-		if _, isKey := actor.keyRef(); isKey {
+		if _, isKey := actor.KeyRef(); isKey {
 			if err := s.keyMayManage(ctx, actor, k); err != nil {
 				return err
 			}
@@ -318,7 +318,7 @@ func (s *Service) CheckCredentialFor(p *Principal, perm rbac.Requirement) error 
 	if p == nil || p.Perms == nil {
 		return fmt.Errorf("%w: no principal", ErrInvalidCredentials)
 	}
-	if keyID, isKey := p.keyRef(); isKey {
+	if keyID, isKey := p.KeyRef(); isKey {
 		k, err := s.d.Store.APIKeyByID(context.Background(), keyID)
 		if errors.Is(err, ErrNotFound) {
 			return fmt.Errorf("%w: key %s", ErrRevoked, keyID)

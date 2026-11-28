@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"slices"
+	"time"
 
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/health/diagnostics"
@@ -33,11 +35,18 @@ type diagnosticsUsers interface {
 	User(ctx context.Context, id auth.UserID) (*auth.User, error)
 }
 
+// diagnosticsKeys is the auth.Service method ViewerFor reads a key through:
+// the owner's keys, as the service lists them (never a secret).
+type diagnosticsKeys interface {
+	APIKeys(ctx context.Context, owner auth.UserID) iter.Seq2[*auth.APIKey, error]
+}
+
 // Each seam is asserted against the real service the F8-04 fold will pass, so
 // a change to the service's method fails the build here, not at the fold. The
 // test doubles satisfy the seams by shape alone and would not notice.
 var (
 	_ diagnosticsUsers = (*auth.Service)(nil)
+	_ diagnosticsKeys  = (*auth.Service)(nil)
 	_ checkerCompiler  = (*rbac.Service)(nil)
 	_ exportStarter    = tasks.Client(nil)
 	_ runRecords       = tasks.RunStore(nil)
@@ -55,21 +64,55 @@ type checkerCompiler interface {
 // pending or the _system attribution user. The run fails and writes nothing.
 var errNoDiagnosticsViewer = errors.New("kernel: diagnostics run has no active person to read as")
 
+// tokenMethod is tasks.Actor.AuthMethod of an API key's run (taskhttp's
+// actorOf spells core's api_key method this way).
+const tokenMethod = "token"
+
+// nonKeyMethod reports whether method is one that is known never to be
+// key-bound: the methods whose actor carries no CredentialID on purpose.
+// "system" is the executor's own actor (a schedule, the relay, a module's
+// start); the others are core's session, delegated-session and auth-disabled
+// methods. Any other method name with no CredentialID is not known to be
+// anything, and ViewerFor refuses it.
+func nonKeyMethod(method string) bool {
+	switch method {
+	case string(auth.MethodSession), string(auth.MethodSessionDelegated), string(auth.MethodAuthDisabled), "system":
+		return true
+	}
+	return false
+}
+
 // diagnosticsViewerFor is diagnostics.Config.ViewerFor (F8-03 obligation 4).
-// It resolves the run's stamped actor to the person's CURRENT roles and
-// compiles them with Interactive set by auth.Method.Interactive(), which is
-// true only for actor.AuthMethod "session". Every other method, "token",
-// "session_delegated", "auth_disabled" or one nobody classified, gets the
-// non-interactive checker, so an administrator's API key never reaches a
-// Sensitive scope (core:backup.restore and the rest) that only the live
-// interactive checker admits. A key's own scopes are not on the actor; the
-// start route's request-time snapshot (ExportParams.Perms) narrows what this
-// returns, and never widens it.
+// It resolves the run's stamped actor to the person's CURRENT roles.
 //
-// A nil users or rbac yields a nil function, which diagnostics.New refuses,
-// so boot fails closed.
-func diagnosticsViewerFor(users diagnosticsUsers, rb checkerCompiler) func(context.Context, tasks.Actor) (diagnostics.Viewer, error) {
-	if users == nil || rb == nil {
+// Whether the run is key-bound is decided on the credential, never on the
+// method's name: taskhttp's actorOf stamps CredentialID for every key-bound
+// principal (core's api_key method and any module compat surface built over a
+// key) and for no other.
+//   - CredentialID present: the key is read again, whatever AuthMethod says. A
+//     key that is missing, revoked, not active, expired or another user's
+//     refuses the run; a live one narrows the viewer to the user's current
+//     roles within the key's CURRENT scopes, compiled non-interactive, so a key
+//     narrowed or revoked after the run started narrows or ends the run.
+//   - No CredentialID and a known non-key method (session, session_delegated,
+//     auth_disabled, system): the user's current roles, interactive only for
+//     "session" (auth.Method.Interactive). There is no liveness check: a run
+//     keeps going after its starter signs out.
+//   - No CredentialID and "token", or any method not listed above: refused. A
+//     token actor with no id is a run stamped before the id existed or an actor
+//     assembled by hand, and there is no way to tell which key's scopes apply;
+//     a method nobody classified may be a key-bound one this function cannot
+//     recognise.
+//
+// So an administrator's API key never reaches a Sensitive scope
+// (core:backup.restore and the rest) that only the live interactive checker
+// admits. The start route's request-time snapshot (ExportParams.Perms) narrows
+// what this returns, and never widens it.
+//
+// A nil users, keys or rbac yields a nil function, which diagnostics.New
+// refuses, so boot fails closed.
+func diagnosticsViewerFor(users diagnosticsUsers, keys diagnosticsKeys, rb checkerCompiler) func(context.Context, tasks.Actor) (diagnostics.Viewer, error) {
+	if users == nil || keys == nil || rb == nil {
 		return nil
 	}
 	return func(ctx context.Context, actor tasks.Actor) (diagnostics.Viewer, error) {
@@ -83,12 +126,62 @@ func diagnosticsViewerFor(users diagnosticsUsers, rb checkerCompiler) func(conte
 		if u == nil || u.Status != auth.StatusActive {
 			return diagnostics.Viewer{}, fmt.Errorf("%w: the user is not active", errNoDiagnosticsViewer)
 		}
-		c := rb.Compile(rbac.CheckerInput{Roles: u.Roles, Interactive: auth.Method(actor.AuthMethod).Interactive()})
+		in := rbac.CheckerInput{Roles: u.Roles}
+		switch {
+		case actor.CredentialID != "":
+			scopes, err := currentKeyScopes(ctx, keys, u.ID, actor.CredentialID, time.Now())
+			if err != nil {
+				return diagnostics.Viewer{}, err
+			}
+			in.Scopes = scopes // non-interactive: a key is never an interactive credential
+		case actor.AuthMethod == tokenMethod:
+			return diagnostics.Viewer{}, fmt.Errorf("%w: no credential id", errNoDiagnosticsViewer)
+		case nonKeyMethod(actor.AuthMethod):
+			in.Interactive = auth.Method(actor.AuthMethod).Interactive()
+		default:
+			return diagnostics.Viewer{}, fmt.Errorf("%w: unrecognised method with no credential id", errNoDiagnosticsViewer)
+		}
+		c := rb.Compile(in)
 		if c == nil {
 			return diagnostics.Viewer{}, fmt.Errorf("%w: no checker", errNoDiagnosticsViewer)
 		}
 		return diagnostics.Viewer{ActorID: actor.UserID, Can: c.Has}, nil
 	}
+}
+
+// currentKeyScopes reads key id as it is now and returns its scopes. It is
+// auth's key rule applied to a stored key (auth.CheckCredentialFor,
+// Service.Revalidate): the key must exist, be the owner's, be active and be
+// unexpired, and every other state refuses. The scopes are never empty: a key
+// with none is refused, because an empty list means "every role permission" to
+// a checker and a key has no such meaning.
+func currentKeyScopes(ctx context.Context, keys diagnosticsKeys, owner auth.UserID, id string, now time.Time) ([]rbac.Permission, error) {
+	if id == "" {
+		return nil, fmt.Errorf("%w: no credential id", errNoDiagnosticsViewer)
+	}
+	var k *auth.APIKey
+	for cand, err := range keys.APIKeys(ctx, owner) {
+		if err != nil {
+			return nil, fmt.Errorf("%w: credential read: %w", errNoDiagnosticsViewer, err)
+		}
+		if cand != nil && cand.ID == id {
+			k = cand
+			break
+		}
+	}
+	switch {
+	case k == nil:
+		return nil, fmt.Errorf("%w: credential revoked", errNoDiagnosticsViewer)
+	case k.Owner != owner:
+		return nil, fmt.Errorf("%w: credential belongs to another user", errNoDiagnosticsViewer)
+	case k.Status != auth.KeyActive:
+		return nil, fmt.Errorf("%w: credential revoked", errNoDiagnosticsViewer)
+	case !k.ExpiresAt.IsZero() && !now.Before(k.ExpiresAt):
+		return nil, fmt.Errorf("%w: credential expired", errNoDiagnosticsViewer)
+	case len(k.Scopes) == 0:
+		return nil, fmt.Errorf("%w: credential has no scope", errNoDiagnosticsViewer)
+	}
+	return slices.Clone(k.Scopes), nil
 }
 
 // exportStarter is tasks.Client.Start (the executor): it stamps the run's

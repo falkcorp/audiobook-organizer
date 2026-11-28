@@ -37,6 +37,16 @@ func Principal(ctx context.Context) (tasks.Actor, rbac.Checker, bool) {
 
 // actorOf is the actor a principal's runs are stamped with. The method is the
 // credential's class, never a header the client sent.
+//
+// CredentialID is stamped for a key-bound principal and only for one: the key's
+// id when KeyRef reports a key, which covers core's api_key method and every
+// compat surface built over a key whatever its method name. Every other
+// principal (a session, a delegated session, an extension, a compat surface's
+// principal that was built over no key, the auth-disabled one) is stamped none,
+// so an actor's having a CredentialID is the one fact that says it is key-bound
+// and no reader needs to know a method's name to tell. It is an identifier and
+// never a secret. A key-bound principal with no key id is stamped with the empty
+// id and AuthMethod "token", which the reader that needs an id refuses.
 func actorOf(p *auth.Principal) tasks.Actor {
 	a := tasks.Actor{AuthMethod: string(p.Method)}
 	if p.Method == auth.MethodAPIKey {
@@ -44,6 +54,9 @@ func actorOf(p *auth.Principal) tasks.Actor {
 	}
 	if p.User != nil {
 		a.UserID = string(p.User.ID)
+	}
+	if id, isKey := p.KeyRef(); isKey {
+		a.CredentialID = id
 	}
 	return a
 }

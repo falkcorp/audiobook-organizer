@@ -211,14 +211,14 @@ func (p *Principal) checkSeal() error {
 	return nil
 }
 
-// keyRef is the API key p was authenticated by, and false when p was not
+// KeyRef is the API key p was authenticated by, and false when p was not
 // built from a key. It covers both shapes of key principal: core's own
 // (Method MethodAPIKey, CredentialID the key) and a compat surface's (its own
 // Method, keyID the key). Every gate that depends on the key (Revalidate,
 // the effective set, key minting and management, CheckCredentialFor) asks
 // this and never compares Method to MethodAPIKey, so a compat key principal
 // cannot slip past a key rule by carrying another method name.
-func (p *Principal) keyRef() (id string, ok bool) {
+func (p *Principal) KeyRef() (id string, ok bool) {
 	switch {
 	case p == nil:
 		return "", false

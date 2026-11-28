@@ -185,8 +185,19 @@ func (e *executor) Cancel(ctx context.Context, id tasks.RunID) error {
 	return e.CancelAs(ctx, id, actor)
 }
 
+// sameActor is whether a and b are the same person acting the same way: every
+// field but CredentialID. A credential changes under one person (a new sign-in
+// is a new session, a rotated key is a new key), and the rules that ask
+// whether the actor is the same (the starter may cancel its own run, a
+// same-actor fold) are about the person, so they must not start refusing
+// because the credential's id differs.
+func sameActor(a, b tasks.Actor) bool {
+	a.CredentialID, b.CredentialID = "", ""
+	return a == b
+}
+
 func (e *executor) mayCancel(rec tasks.RunRecord, actor tasks.Actor, who rbac.Checker) bool {
-	if actor != (tasks.Actor{}) && actor == rec.Actor {
+	if actor != (tasks.Actor{}) && sameActor(actor, rec.Actor) {
 		return true
 	}
 	if who.Has(scopeTasksManage) {

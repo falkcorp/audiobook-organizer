@@ -337,7 +337,7 @@ func (s *Service) stands(ctx context.Context, p *Principal) (*User, *APIKey, err
 	if err := standing(u); err != nil {
 		return nil, nil, err
 	}
-	keyID, isKey := p.keyRef()
+	keyID, isKey := p.KeyRef()
 	if !isKey && s.surfaceMethod(p.Method) {
 		// A credential the app verified itself (a compat surface's own, an
 		// identity extension's) ends while its user must reset a password, as
