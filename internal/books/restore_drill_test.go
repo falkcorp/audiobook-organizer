@@ -531,6 +531,7 @@ func testCutoverSelftest(t *testing.T) {
 	t.Run("surviving-cases", testSurvivingCasesSelftest)
 	t.Run("holders", testHoldersSelftest)
 	t.Run("identity-ids", testIdentityIDsSelftest)
+	t.Run("m3-writes", testM3WritesSelftest)
 }
 
 // testSurvivingCasesSelftest proves casesSurvivingWrites resolves an overlay

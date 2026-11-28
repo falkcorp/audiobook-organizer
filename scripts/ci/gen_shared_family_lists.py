@@ -144,6 +144,22 @@ REWRITE = (
         "19",
         "M3 rewrites each kept journal once, invite tokens hashed",
     ),
+    # Not §5S.9.1 rows: M3's extra writes 09 §9.2.3 "Shared families" excludes,
+    # books families it fills beside its Source (inviteaccept.go, guestpolicy.go).
+    Entry(
+        "rewrite",
+        "prefix",
+        "acceptedinvite:",
+        "19",
+        "M3 writes an accept row for each HEAD invite used inside the accepted-invite window",
+    ),
+    Entry(
+        "rewrite",
+        "prefix",
+        "guestpolicy:",
+        "19",
+        "M3 writes a guest-policy row for each allow-list grant HEAD's sync added to the policy",
+    ),
     Entry("rewrite", "prefix", "act:audit:", "15", "M4: kind-rename map over stored def IDs"),
     Entry("rewrite", "prefix", "act:batch:", "15", "M4: kind-rename map over stored def IDs"),
     Entry("rewrite", "prefix", "act:change:", "15", "M4: kind-rename map over stored def IDs"),
