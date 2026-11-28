@@ -63,6 +63,9 @@ type Chain[Q, R any] struct {
 	reg     *integrations.Registry
 	o       ChainOptions[Q]
 	workers int
+
+	mu    sync.Mutex
+	gates map[integrations.Ref]*gate // in-flight bound per instance (Limits.MaxConcurrent)
 }
 
 // NewChain returns a Chain over reg's metadata instances.
@@ -299,9 +302,20 @@ func (c *Chain[Q, R]) ask(ctx context.Context, ref integrations.Ref, q Q, explic
 	if cp, ok := inst.(Caps[Q]); ok && !cp.Accepts(q) {
 		return done(slot[R]{out: Outcome{Status: SkippedCaps}})
 	}
-	pctx, cancel := context.WithTimeout(ctx, c.o.PerProvider)
-	defer cancel()
-	rs, at, fromCache, err := cached(pctx, c.o.Cache, p, q)
+	// Limits.MaxConcurrent bounds the searches in flight to this instance
+	// across every search of this chain. The bounded provider takes the slot
+	// and starts the deadline itself, so queueing for a slot is not the
+	// provider's time (see bounded); without a bound the deadline wraps the
+	// whole call as before.
+	callCtx := ctx
+	if limit := c.maxConcurrent(ref); limit > 0 {
+		p = bounded[Q, R]{Provider: p, g: c.gateOf(ref), limit: limit, timeout: c.o.PerProvider}
+	} else {
+		var cancel context.CancelFunc
+		callCtx, cancel = context.WithTimeout(ctx, c.o.PerProvider)
+		defer cancel()
+	}
+	rs, at, fromCache, err := cached(callCtx, c.o.Cache, p, q)
 	if err != nil {
 		return done(slot[R]{out: classify(ctx, err)})
 	}

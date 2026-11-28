@@ -498,6 +498,7 @@ func TestCoreSections_ReloadAndProtection(t *testing.T) {
 		"core.ui.enabled":                    {config.ReloadRestart, config.ProtectNone},
 		"core.ui.csp.connect_src":            {config.ReloadLive, config.ProtectNone},
 		"core.secrets.allow_key_regen":       {config.ReloadRestart, config.ProtectOperator},
+		"core.download.caps_ttl":             {config.ReloadRestart, config.ProtectNone},
 		"core.auth.oidc.providers":           {config.ReloadLive, config.ProtectOwner},
 		"core.diagnostics.dir":               {config.ReloadRestart, config.ProtectAdmin},
 		"core.http.rate_limit.max_clients":   {config.ReloadRestart, config.ProtectNone},

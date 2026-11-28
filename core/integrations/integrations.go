@@ -311,7 +311,15 @@ type Limits struct {
 	MaxRetries    int
 	Timeout       time.Duration // per attempt, starting after the bucket wait (M2.6)
 	RetryAfterMax time.Duration // default 5m
-	Daily         *DailyLimits  // nil: no daily quota
+	// MaxConcurrent bounds the calls in flight to one instance at once, across
+	// every caller of the kind's pool or chain; zero means no bound. It counts
+	// the kind's own unit of work (a metadata Search), not HTTP requests, so it
+	// is enforced by the kind package that issues the calls (the metadata Chain),
+	// never by providerhttp, whose gate sees a call's several requests as
+	// separate ones. A negative value is no bound, and an instance's negative value
+	// lifts the bound its adapter set.
+	MaxConcurrent int
+	Daily         *DailyLimits // nil: no daily quota
 	Breaker       BreakerPolicy
 	Holds         HoldPolicy
 }

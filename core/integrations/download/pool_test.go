@@ -18,16 +18,17 @@ import (
 	"github.com/falkcorp/mediacore/coretest"
 	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/integrations/download"
+	"github.com/falkcorp/mediacore/library"
 )
 
 func classOf(err error) integrations.Class { return integrations.ClassOf(context.Background(), err) }
 
 // standardMappings maps seedbox's /remote/books to the library's incoming
 // directory and rpi-box's /mnt/rpi to another directory.
-func standardMappings() download.PathMapper {
-	return mapper(map[integrations.InstanceID][]download.Mapping{
-		"seedbox": {{Remote: "/remote/books", Local: "/srv/library/incoming"}},
-		"rpi-box": {{Remote: "/mnt/rpi/dl", Local: "/srv/library/rpi"}},
+func standardMappings() library.PathMapper {
+	return mapper(map[integrations.InstanceID][]library.Mapping{
+		"seedbox": {lmap("/remote/books", "library", "incoming")},
+		"rpi-box": {lmap("/mnt/rpi/dl", "library", "rpi")},
 	})
 }
 
@@ -44,22 +45,22 @@ func TestPool_ItemsFillsLocalPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := map[download.ItemID]download.LocalPath{}
+	got := map[download.ItemID]library.Path{}
 	for _, it := range items {
 		got[it.Ref.ID] = it.LocalPath
 		if it.Ref.Instance != seedbox {
 			t.Errorf("%s: instance = %v", it.Ref.ID, it.Ref.Instance)
 		}
 	}
-	want := map[download.ItemID]download.LocalPath{
-		"aa": "/srv/library/incoming",
-		"bb": "/srv/library/incoming/sub",
-		"cc": "",
-		"dd": "",
+	want := map[download.ItemID]library.Path{
+		"aa": lpath("library", "incoming"),
+		"bb": lpath("library", "incoming/sub"),
+		"cc": {},
+		"dd": {},
 	}
 	for id, w := range want {
 		if got[id] != w {
-			t.Errorf("%s: LocalPath = %q, want %q", id, got[id], w)
+			t.Errorf("%s: LocalPath = %v, want %v", id, got[id], w)
 		}
 	}
 	// The client's own answer is left alone.
@@ -73,7 +74,7 @@ func TestPool_ItemsWithoutMapperMapsNothing(t *testing.T) {
 	f := h.addFake(seedbox, crateAdapter, 0)
 	f.Add(item("aa", "Year One", "/remote/books", "completed", 1))
 	items, err := h.newPool(download.PoolOptions{}).Items(context.Background(), seedbox, download.ItemFilter{})
-	if err != nil || len(items) != 1 || items[0].LocalPath != "" {
+	if err != nil || len(items) != 1 || items[0].LocalPath != (library.Path{}) {
 		t.Fatalf("items = %+v, %v", items, err)
 	}
 }
@@ -116,13 +117,13 @@ func TestPool_RelocateGroupsByInstance(t *testing.T) {
 	a.Add(item("aa", "Year One", "/remote/books", "completed", 1))
 	a.Add(item("a2", "Hush", "/remote/books", "completed", 1))
 	b.Add(item("bb", "Owls", "/mnt/rpi/dl", "completed", 1))
-	p := h.newPool(download.PoolOptions{Paths: mapper(map[integrations.InstanceID][]download.Mapping{
-		"seedbox": {{Remote: "/remote/library", Local: "/srv/library"}},
-		"rpi-box": {{Remote: "/mnt/rpi/library", Local: "/srv/library"}},
+	p := h.newPool(download.PoolOptions{Paths: mapper(map[integrations.InstanceID][]library.Mapping{
+		"seedbox": {lmap("/remote/library", "library", "")},
+		"rpi-box": {lmap("/mnt/rpi/library", "library", "")},
 	})})
 
 	refs := []download.ItemRef{{Instance: seedbox, ID: "aa"}, {Instance: rpiBox, ID: "bb"}, {Instance: seedbox, ID: "a2"}, {Instance: seedbox, ID: "aa"}}
-	if err := p.Relocate(context.Background(), refs, "/srv/library/Batman"); err != nil {
+	if err := p.Relocate(context.Background(), refs, lpath("library", "Batman")); err != nil {
 		t.Fatal(err)
 	}
 	if a.Calls("relocate") != 1 || b.Calls("relocate") != 1 {
@@ -135,7 +136,7 @@ func TestPool_RelocateGroupsByInstance(t *testing.T) {
 	if len(bm) != 1 || bm[0].Dir != "/mnt/rpi/library/Batman" || !slices.Equal(bm[0].IDs, []download.ItemID{"bb"}) {
 		t.Errorf("rpi-box saw %+v", bm)
 	}
-	if err := p.Relocate(context.Background(), nil, "/srv/library"); err != nil {
+	if err := p.Relocate(context.Background(), nil, lpath("library", "")); err != nil {
 		t.Errorf("nothing to move: %v", err)
 	}
 }
@@ -146,23 +147,23 @@ func TestPool_RelocateValidatesBeforeSending(t *testing.T) {
 	for name, setup := range map[string]struct {
 		prepare func(h *harness, b *coretest.FakeDownloadClient)
 		class   integrations.Class
-		mapper  download.PathMapper
+		mapper  library.PathMapper
 	}{
-		"a second instance with no mapping": {mapper: mapper(map[integrations.InstanceID][]download.Mapping{
-			"seedbox": {{Remote: "/remote/library", Local: "/srv/library"}},
+		"a second instance with no mapping": {mapper: mapper(map[integrations.InstanceID][]library.Mapping{
+			"seedbox": {lmap("/remote/library", "library", "")},
 		}), class: integrations.ClassInvalid},
 		"a second instance without the capability": {
-			mapper: mapper(map[integrations.InstanceID][]download.Mapping{
-				"seedbox": {{Remote: "/remote/library", Local: "/srv/library"}},
-				"rpi-box": {{Remote: "/mnt/rpi/library", Local: "/srv/library"}},
+			mapper: mapper(map[integrations.InstanceID][]library.Mapping{
+				"seedbox": {lmap("/remote/library", "library", "")},
+				"rpi-box": {lmap("/mnt/rpi/library", "library", "")},
 			}),
 			prepare: func(_ *harness, b *coretest.FakeDownloadClient) { b.SetCaps(download.Caps{Protocol: download.Torrent}) },
 			class:   integrations.ClassUnsupported,
 		},
 		"a second instance that is not a Relocator": {
-			mapper: mapper(map[integrations.InstanceID][]download.Mapping{
-				"seedbox": {{Remote: "/remote/library", Local: "/srv/library"}},
-				"rpi-box": {{Remote: "/mnt/rpi/library", Local: "/srv/library"}},
+			mapper: mapper(map[integrations.InstanceID][]library.Mapping{
+				"seedbox": {lmap("/remote/library", "library", "")},
+				"rpi-box": {lmap("/mnt/rpi/library", "library", "")},
 			}),
 			prepare: func(h *harness, b *coretest.FakeDownloadClient) {
 				h.serve(rpiBox, crateAdapter, b.ClientOnly())
@@ -180,7 +181,7 @@ func TestPool_RelocateValidatesBeforeSending(t *testing.T) {
 				setup.prepare(h, b)
 			}
 			p := h.newPool(download.PoolOptions{Paths: setup.mapper})
-			err := p.Relocate(ctx, []download.ItemRef{{Instance: seedbox, ID: "aa"}, {Instance: rpiBox, ID: "bb"}}, "/srv/library/Batman")
+			err := p.Relocate(ctx, []download.ItemRef{{Instance: seedbox, ID: "aa"}, {Instance: rpiBox, ID: "bb"}}, lpath("library", "Batman"))
 			if classOf(err) != setup.class {
 				t.Fatalf("class = %v (%v), want %v", classOf(err), err, setup.class)
 			}
@@ -197,12 +198,12 @@ func TestPool_RelocateJoinsInstanceErrors(t *testing.T) {
 	b := h.addFake(rpiBox, crateAdapter, 1)
 	a.Add(item("aa", "Year One", "/remote/books", "completed", 1))
 	b.Add(item("bb", "Owls", "/mnt/rpi/dl", "completed", 1))
-	p := h.newPool(download.PoolOptions{Paths: mapper(map[integrations.InstanceID][]download.Mapping{
-		"seedbox": {{Remote: "/remote/library", Local: "/srv/library"}},
-		"rpi-box": {{Remote: "/mnt/rpi/library", Local: "/srv/library"}},
+	p := h.newPool(download.PoolOptions{Paths: mapper(map[integrations.InstanceID][]library.Mapping{
+		"seedbox": {lmap("/remote/library", "library", "")},
+		"rpi-box": {lmap("/mnt/rpi/library", "library", "")},
 	})})
 	a.Fail("relocate", &integrations.Error{Ref: seedbox, Op: "relocate", Class: integrations.ClassTransient})
-	err := p.Relocate(context.Background(), []download.ItemRef{{Instance: seedbox, ID: "aa"}, {Instance: rpiBox, ID: "bb"}}, "/srv/library/Batman")
+	err := p.Relocate(context.Background(), []download.ItemRef{{Instance: seedbox, ID: "aa"}, {Instance: rpiBox, ID: "bb"}}, lpath("library", "Batman"))
 	if err == nil || !strings.Contains(err.Error(), "seedbox") || strings.Contains(err.Error(), "rpi-box") {
 		t.Fatalf("err = %v, want only seedbox's failure", err)
 	}
@@ -216,16 +217,16 @@ func TestPool_RelocateFanOutIsBounded(t *testing.T) {
 	const instances, limit = 8, 3
 	h := newHarness(t)
 	var running, peak atomic.Int64
-	rows := map[integrations.InstanceID][]download.Mapping{}
+	rows := map[integrations.InstanceID][]library.Mapping{}
 	var refs []download.ItemRef
 	for i := range instances {
 		ref := integrations.Ref{Kind: integrations.KindDownload, Instance: integrations.InstanceID("box-" + string(rune('a'+i)))}
 		h.serve(ref, crateAdapter, &slowRelocator{FakeDownloadClient: coretest.NewFakeDownloadClient(ref.Instance), running: &running, peak: &peak})
-		rows[ref.Instance] = []download.Mapping{{Remote: "/remote/library", Local: "/srv/library"}}
+		rows[ref.Instance] = []library.Mapping{lmap("/remote/library", "library", "")}
 		refs = append(refs, download.ItemRef{Instance: ref, ID: "aa"})
 	}
 	p := h.newPool(download.PoolOptions{Paths: mapper(rows), Parallelism: limit})
-	if err := p.Relocate(context.Background(), refs, "/srv/library/Batman"); err != nil {
+	if err := p.Relocate(context.Background(), refs, lpath("library", "Batman")); err != nil {
 		t.Fatal(err)
 	}
 	if got := peak.Load(); got > limit || got < 2 {
@@ -253,19 +254,19 @@ func (s *slowRelocator) SetLocation(context.Context, []download.ItemID, string) 
 }
 
 func TestPaths_UnmappedRelocateRefused(t *testing.T) {
-	for name, paths := range map[string]download.PathMapper{
+	for name, paths := range map[string]library.PathMapper{
 		"no mapper":              nil,
-		"no mapping for the dir": mapper(map[integrations.InstanceID][]download.Mapping{"seedbox": {{Remote: "/remote/library", Local: "/srv/other"}}}),
-		"a prefix is not a dir":  mapper(map[integrations.InstanceID][]download.Mapping{"seedbox": {{Remote: "/remote/library", Local: "/srv/lib"}}}),
+		"no mapping for the dir": mapper(map[integrations.InstanceID][]library.Mapping{"seedbox": {lmap("/remote/library", "other", "")}}),
+		"a prefix is not a dir":  mapper(map[integrations.InstanceID][]library.Mapping{"seedbox": {lmap("/remote/library", "library", "Bat")}}),
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t)
 			f := h.addFake(seedbox, crateAdapter, 0)
 			f.Add(item("aa", "Year One", "/remote/books", "completed", 1))
 			p := h.newPool(download.PoolOptions{Paths: paths})
-			err := p.Relocate(context.Background(), []download.ItemRef{{Instance: seedbox, ID: "aa"}}, "/srv/library/Batman")
+			err := p.Relocate(context.Background(), []download.ItemRef{{Instance: seedbox, ID: "aa"}}, lpath("library", "Batman"))
 			e, ok := errors.AsType[*integrations.Error](err)
-			if !ok || e.Class != integrations.ClassInvalid || !strings.Contains(err.Error(), "no mapping covers /srv/library/Batman") {
+			if !ok || e.Class != integrations.ClassInvalid || !strings.Contains(err.Error(), "no mapping covers library:Batman") {
 				t.Fatalf("err = %v", err)
 			}
 			if len(f.Scenario().Moves()) != 0 || f.Calls("relocate") != 0 {
@@ -279,7 +280,7 @@ func TestPool_RelocateEmptyDirIsRefused(t *testing.T) {
 	h := newHarness(t)
 	f := h.addFake(seedbox, crateAdapter, 0)
 	p := h.newPool(download.PoolOptions{Paths: standardMappings()})
-	err := p.Relocate(context.Background(), []download.ItemRef{{Instance: seedbox, ID: "aa"}}, "")
+	err := p.Relocate(context.Background(), []download.ItemRef{{Instance: seedbox, ID: "aa"}}, library.Path{})
 	if classOf(err) != integrations.ClassInvalid || f.Calls("relocate") != 0 {
 		t.Errorf("err = %v, calls = %d", err, f.Calls("relocate"))
 	}
@@ -298,7 +299,7 @@ func TestPool_IntegrationsDisabledNoClientCall(t *testing.T) {
 		t.Helper()
 		_, e1 := p.Items(ctx, seedbox, download.ItemFilter{})
 		_, e2 := p.Files(ctx, ref)
-		e3 := p.Relocate(ctx, []download.ItemRef{ref}, "/srv/library/incoming/Batman")
+		e3 := p.Relocate(ctx, []download.ItemRef{ref}, lpath("library", "incoming/Batman"))
 		_, _, e4 := p.Lease(ctx, seedbox)
 		for i, err := range []error{e1, e2, e3, e4} {
 			if !errors.Is(err, integrations.ErrDisabled) || classOf(err) != integrations.ClassRefusedLocal {
@@ -352,7 +353,7 @@ func TestPool_Instances(t *testing.T) {
 	// Learn the protocols: the nzb adapter's client says usenet.
 	h.fakes["wayne-nzb"].SetCaps(download.Caps{Protocol: download.Usenet})
 	for _, ref := range []integrations.Ref{wayne, rpiBox} {
-		_ = p.Relocate(context.Background(), []download.ItemRef{{Instance: ref, ID: "x"}}, "/srv/library/x")
+		_ = p.Relocate(context.Background(), []download.ItemRef{{Instance: ref, ID: "x"}}, lpath("library", "x"))
 	}
 	if got := p.Instances(download.Usenet); !slices.Equal(got, []integrations.Ref{wayne}) {
 		t.Errorf("Instances(Usenet) = %v, want only the nzb instance", got)
@@ -377,10 +378,10 @@ func TestPool_Files(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 2 || files[0].LocalPath != "/srv/library/incoming/Year One/part1.m4b" || files[1].LocalPath != "/srv/library/incoming/Year One/cover.jpg" {
+	if len(files) != 2 || files[0].LocalPath != lpath("library", "incoming/Year One/part1.m4b") || files[1].LocalPath != lpath("library", "incoming/Year One/cover.jpg") {
 		t.Errorf("files = %+v", files)
 	}
-	if files, err = p.Files(ctx, download.ItemRef{Instance: seedbox, ID: "bb"}); err != nil || len(files) != 1 || files[0].LocalPath != "" {
+	if files, err = p.Files(ctx, download.ItemRef{Instance: seedbox, ID: "bb"}); err != nil || len(files) != 1 || files[0].LocalPath != (library.Path{}) {
 		t.Errorf("files of an unmapped item = %+v, %v", files, err)
 	}
 	if _, err := p.Files(ctx, download.ItemRef{Instance: seedbox, ID: "zz"}); classOf(err) != integrations.ClassNotFound {

@@ -634,8 +634,14 @@ type secretsSettings struct {
 
 // ---- core.download (05-download §7) ----
 
+// downloadSettings is core.download. caps_ttl is reload:"restart":
+// download.PoolOptions.CapsTTL is a plain time.Duration fixed when the Pool is
+// built, with no func form, so a changed value cannot reach a running Pool.
+// Tagging it live would promise a hot reload the Pool cannot do (the spec table
+// in 05-download §7 says "yes"; that is the divergence, and the tag is the
+// truthful side of it until the Pool takes a func).
 type downloadSettings struct {
-	CapsTTL config.Duration `json:"caps_ttl"`
+	CapsTTL config.Duration `json:"caps_ttl" reload:"restart"`
 }
 
 // ---- core.events, core.outbox (05-events §5E.9) ----

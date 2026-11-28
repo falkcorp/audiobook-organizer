@@ -437,7 +437,7 @@ func TestOptionsProbed_FiresOnEveryProbe(t *testing.T) {
 	var probed []integrations.HealthStatus
 	var changed int
 	r := e.registry(t, nil, func(o *integrations.Options) {
-		o.HealthChanged = func(integrations.Ref, integrations.Health) { changed++ }
+		o.HealthChanged = func(integrations.Ref, integrations.Health, bool) { changed++ }
 		o.Probed = func(ref integrations.Ref, h integrations.Health) {
 			if ref != signalRef {
 				t.Errorf("Probed named %s", ref)

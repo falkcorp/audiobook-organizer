@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/integrations"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // Protocol is the wire family of a download client.
@@ -119,9 +120,8 @@ const RawUnknownState = "unknown_state"
 
 // Item is one download as a client reports it.
 //
-// LocalPath is a plain host path in this phase: 05-download §3 types it
-// library.Path, which does not exist until F7-06 completes core/library. F7-06
-// or F7-09 re-types LocalPath then (an F7-04 seam, seams.d/F7-04.md).
+// LocalPath is the library.Path the Pool maps RemotePath to through the
+// library's PathMapper (05-download §4.4); the zero Path means unmapped.
 type Item struct {
 	Ref           ItemRef
 	Protocol      Protocol
@@ -139,7 +139,7 @@ type Item struct {
 	AddedAt       time.Time
 	CompletedAt   time.Time
 	RemotePath    string            // content path as the CLIENT reports it
-	LocalPath     LocalPath         // RemotePath mapped to this host; "" when unmapped (§4.4)
+	LocalPath     library.Path      // RemotePath mapped into a library root; zero when unmapped (§4.4)
 	Message       string            // client status text, redacted
 	CanMoveFiles  bool              // torrent seeding must continue → hardlink/copy, not move
 	CanBeRemoved  bool              // torrent: completed and the client has stopped seeding
@@ -152,7 +152,7 @@ type File struct {
 	Size      int64
 	Progress  float64 // 0..1
 	Priority  int
-	LocalPath LocalPath // mapped; "" when unmapped
+	LocalPath library.Path // mapped; zero when unmapped
 }
 
 // ItemFilter selects items. Every non-empty field narrows the result (all

@@ -484,18 +484,29 @@ func (r *Registry) ProbeAll(ctx context.Context) error {
 // Options.HealthChanged when the status moved and Options.Probed always.
 func (r *Registry) observe(s *slot, h Health, probed bool, d time.Duration) {
 	ref := s.cfg.Ref
-	r.hmu.Lock()
-	prev, had := r.last[ref]
-	r.last[ref] = h
-	r.hmu.Unlock()
+	r.record(ref, h)
 	if probed {
 		r.met.probed(ref, s.cfg.Adapter, d)
 	}
-	if r.o.HealthChanged != nil && (!had || prev.Status != h.Status) {
-		r.o.HealthChanged(ref, h)
-	}
 	if r.o.Probed != nil {
 		r.o.Probed(ref, h)
+	}
+}
+
+// record stores h as ref's last health and, when the status moved or this is
+// the first one, calls Options.HealthChanged before the lock is released. The
+// call is inside the lock on purpose: with it outside, two concurrent probes of
+// one ref could each record in one order and report in the other, and a
+// consumer would end on a status the Registry no longer holds. The hook's
+// contract (it neither blocks nor re-enters the Registry) is on
+// Options.HealthChanged.
+func (r *Registry) record(ref Ref, h Health) {
+	r.hmu.Lock()
+	defer r.hmu.Unlock()
+	prev, had := r.last[ref]
+	r.last[ref] = h
+	if r.o.HealthChanged != nil && (!had || prev.Status != h.Status) {
+		r.o.HealthChanged(ref, h, !had)
 	}
 }
 
