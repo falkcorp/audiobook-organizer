@@ -189,10 +189,10 @@ func (h *UserHandler) ListUsers(c *gin.Context) {
 }
 
 // listUsersUnderIdentity is every account core holds, in core's order, as
-// HEAD's user record (legacyauth.LegacyUserFromCore, the one mapping every
-// account list under core identity uses, the store's included). Any read error
-// fails the list: a list that silently left an account out would read as that
-// account being gone.
+// HEAD's user record (legacyauth.LegacyUserFromCore, the mapping the store's
+// account list uses too, so the page and the store agree on every word). Any
+// read error fails the list: a list that silently left an account out would
+// read as that account being gone.
 func listUsersUnderIdentity(ctx context.Context, id *legacyauth.Identity) ([]database.User, error) {
 	if id.Users == nil {
 		return nil, errNoIdentityUsers

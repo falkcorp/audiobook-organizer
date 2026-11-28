@@ -14,10 +14,13 @@ import (
 	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
-// LegacyUserFromCore is a core account in HEAD's words: the one mapping of a
-// core user into HEAD's user record for every list of accounts books reads
-// under core identity (the store's account list, UserDirectory, and the Users
-// page's list).
+// LegacyUserFromCore is a core account in HEAD's words: the mapping of a core
+// user into HEAD's user record that the store's account list (UserDirectory)
+// and the Users page's list share, so those two agree on every word. It is not
+// every account list under core identity: the guest-key code's list
+// (coreGuestUsers.ListUsers, server/guest_key_users.go) and user-merge's
+// account summaries (usermerge summarizeCore) keep core's words ("disabled",
+// roles never nil).
 //
 // Roles keep nil as nil (HEAD's system user had none, shown as null). Core's
 // "disabled" is HEAD's "inactive", HEAD's canonical word for it: M3 maps every
