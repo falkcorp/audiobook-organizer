@@ -44,7 +44,7 @@ func TestRoutes_Table(t *testing.T) {
 		{"POST", "/runs/{id}/decide", "authenticated"},
 		{"GET", "/counts", "core:tasks.view"},
 		{"GET", "/timeline", "core:tasks.view"},
-		{"GET", "/schedules", "core:tasks.view"},
+		{"GET", "/schedules", "core:tasks.manage"},
 		{"PATCH", "/schedules/{kind}", "core:tasks.manage"},
 		{"GET", "/pause", "core:tasks.view"},
 		{"POST", "/pause", "core:tasks.manage"},

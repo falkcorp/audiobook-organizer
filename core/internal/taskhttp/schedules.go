@@ -53,7 +53,8 @@ func (e errScheduleUndeclared) Error() string {
 	return "taskhttp: schedule key " + string(e) + " is not declared in config"
 }
 
-// listSchedules: GET /schedules (core:tasks.view; a definition the caller may
+// listSchedules: GET /schedules (core:tasks.manage, the floor of HEAD's
+// GET /api/v1/tasks, which needs settings.manage; a definition the caller may
 // not view is omitted).
 func (s *Server) listSchedules(w http.ResponseWriter, r *http.Request, p *auth.Principal) {
 	out := make([]scheduleDTO, 0)

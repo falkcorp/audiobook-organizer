@@ -24,7 +24,7 @@ func patchSchedule(kind, body string, as req) req {
 func TestSchedules_List(t *testing.T) {
 	g := newRig(t)
 	g.cfg.keys[sweepKey] = config.KeyState{Path: sweepKey, Effective: json.RawMessage(`{"enabled":true,"every":"6h"}`), LockedBy: "env ABO_CORE_BATCAVE"}
-	rec := g.do(req{method: "GET", path: "/schedules", as: session("alfred", scopeView)})
+	rec := g.do(req{method: "GET", path: "/schedules", as: session("alfred", scopeManage, scopeView)})
 	var b struct{ Schedules []scheduleDTO }
 	decode(t, rec, &b)
 	if rec.Code != 200 || len(b.Schedules) != 1 {
@@ -43,16 +43,29 @@ func TestSchedules_List(t *testing.T) {
 			Schedule: tasks.ScheduleFromConfig("core.batcave.schedules.secret").Live(), Run: func(*tasks.RC, struct{}) (struct{}, error) { return struct{}{}, nil }}))
 	})
 	g.cfg.keys["core.batcave.schedules.secret"] = config.KeyState{Path: "core.batcave.schedules.secret"}
-	rec = g.do(req{method: "GET", path: "/schedules", as: session("alfred", scopeView)})
+	rec = g.do(req{method: "GET", path: "/schedules", as: session("alfred", scopeManage, scopeView)})
 	decode(t, rec, &b)
 	if len(b.Schedules) != 1 {
 		t.Fatalf("a view-gated kind's schedule is listed: %+v", b.Schedules)
 	}
 	b.Schedules = nil
-	rec = g.do(req{method: "GET", path: "/schedules", as: session("alfred", scopeView, scopeSee)})
+	rec = g.do(req{method: "GET", path: "/schedules", as: session("alfred", scopeManage, scopeView, scopeSee)})
 	decode(t, rec, &b)
 	if len(b.Schedules) != 2 {
 		t.Fatalf("schedules = %+v, want both for a viewer of the gated kind", b.Schedules)
+	}
+}
+
+// TestSchedules_ListFloor (F5-18 reach R1): GET /schedules needs
+// core:tasks.manage, the floor of HEAD's GET /api/v1/tasks (settings.manage).
+// A library.view holder (core:tasks.view and nothing more) gets 403 and no
+// body; killed by the floor going back to core:tasks.view, which answers it 200.
+func TestSchedules_ListFloor(t *testing.T) {
+	g := newRig(t)
+	viewer := g.do(req{method: "GET", path: "/schedules", as: session("robin", scopeView)})
+	wantProblem(t, viewer, 403, "permission_denied")
+	if got := g.do(req{method: "GET", path: "/schedules", as: session("alfred", scopeManage, scopeView)}); got.Code != 200 {
+		t.Fatalf("a core:tasks.manage holder = %d, want 200\n%s", got.Code, got.Body.String())
 	}
 }
 

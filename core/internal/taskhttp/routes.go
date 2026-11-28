@@ -196,7 +196,7 @@ func (s *Server) buildRoutes() []Route {
 		rt("POST", "/runs/{id}/decide", "decideTaskRun", "Resume, finish or drop a run awaiting a decision", authed, s.decideRun),
 		rt("GET", "/counts", "getTaskCounts", "Count runs by state", view, s.getCounts),
 		rt("GET", "/timeline", "getTaskTimeline", "Runs finished in a window, plus unfinished ones", view, s.getTimeline),
-		rt("GET", "/schedules", "listTaskSchedules", "List the schedules the caller may view", view, s.listSchedules),
+		rt("GET", "/schedules", "listTaskSchedules", "List the schedules the caller may view", manage, s.listSchedules),
 		rt("PATCH", "/schedules/{kind}", "updateTaskSchedule", "Change a kind's schedule", manage, s.patchSchedule),
 		rt("GET", "/pause", "getTaskPause", "Read the operator pause marker", view, s.getPause),
 		rt("POST", "/pause", "pauseTasks", "Pause the executor", manage, s.pause),
