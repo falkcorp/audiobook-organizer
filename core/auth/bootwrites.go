@@ -40,8 +40,12 @@ const (
 // around each (06 §6.5.1 P4d step 4). A region is a no-op in production (no
 // boot carries a Labeler). The token and key files keep their own state
 // filesystem labels (BootstrapTokenLabel, ReadOnlyKeyLabel): the regions wrap
-// the commits only. No boot calls BootWrites until F4-08 wires P4d step 4; the
-// row in core/coretest/crashmatrix is Unbound until then.
+// the commits only. The identity boot calls BootWrites at P4d step 4:
+// core/kernel/boot.go (phase P4d) -> runP4dSteps (core/kernel/p4d_steps.go)
+// -> the BootWrites step that core/kernel/identity_p4d.go wires. Its rows in
+// core/coretest/crashmatrix are bound (no Unbound reason); the labels no
+// fixture's fault-free boot reaches are listed with their reasons in
+// IdentityUnreachedLabels.
 const (
 	// LabelBootSystemUser is the _system user's seed.
 	LabelBootSystemUser = "auth.boot.system_user"
