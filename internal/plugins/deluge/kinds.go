@@ -342,6 +342,14 @@ const outboxSystemStartReason = "started by the books module's own relocation co
 // run (dry_run defaulted to true there, and a native run that names no mode
 // resolves to Preview for a writer kind, so the default carries over).
 func (p *Plugin) pathUpdateNative(d KindDeps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	return p.pathUpdateWith(d, sched, nil)
+}
+
+// pathUpdateWith is pathUpdateNative with edit applied to the definition's
+// Common last. Production passes none; a test that boots the real definition
+// on core uses it for the one thing registration needs that this package does
+// not decide (see relocation_follow_up_durable_test.go).
+func (p *Plugin) pathUpdateWith(d KindDeps, sched func(tasks.Kind) *tasks.Schedule, edit func(*tasks.Common)) tasks.Definition {
 	c := kindCommon(pathUpdateKind, sched)
 	c.Title = "Update Deluge torrent path"
 	c.Help = pathUpdateHelp
@@ -380,6 +388,9 @@ func (p *Plugin) pathUpdateNative(d KindDeps, sched func(tasks.Kind) *tasks.Sche
 	// follow-up of a committed relocation would be refused and dead-letter. Hand
 	// starts keep Start as it is (core/tasks Permissions.OutboxSystemStart).
 	c.Perms.OutboxSystemStart = outboxSystemStartReason
+	if edit != nil {
+		edit(&c)
+	}
 	return tasks.Task(pathUpdateKind, tasks.TaskSpec[json.RawMessage, pathUpdateResult]{
 		Common: c,
 		Run: func(rc *tasks.RC, raw json.RawMessage) (pathUpdateResult, error) {
