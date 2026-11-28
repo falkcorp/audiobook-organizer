@@ -962,6 +962,12 @@ class P6Base(unittest.TestCase):
             "\t@printf '%s\\n' \"APPLY=$(APPLY) REPLACE_CONF=$(REPLACE_CONF) UNIT=$(DEPLOY_UNIT) "
             'BIN=$(DEPLOY_BIN) DB=$(DB_OR) ARGS=$(ROLLBACK_INSTALL_ARGS)" >> "$$INSTALL_LOG"\n'
             '\t@if [ -n "$(APPLY)" ]; then cp "$$AFTER_CONF" "$$CONF_PATH"; fi\n'
+            # The undo's installer writes the bundle of the commit it runs from.
+            '\t@if [ -n "$(APPLY)" ] && [ -n "$$LIBDIR_PATH" ]; then '
+            "cp deploy/rollback-helpers/rollback_helper.py deploy/rollback-helpers/restore-offline "
+            'deploy/audiobook-organizer.service "$$LIBDIR_PATH/"; '
+            '[ -z "$$LIBDIR_BREAK" ] || echo tampered >> "$$LIBDIR_PATH/$$LIBDIR_BREAK"; '
+            '[ -z "$$LIBDIR_DROP" ] || rm -f "$$LIBDIR_PATH/$$LIBDIR_DROP"; fi\n'
         )
         mk = mk.replace("$(DB_OR)", "$(DEPLOY_DB)")
         (work / "Makefile").write_text(mk)
@@ -977,6 +983,9 @@ class P6Base(unittest.TestCase):
             )
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(body)
+        # Tracked beside the bundle but never installed: not part of what the undo expects.
+        for name in ("install_helpers.py", "rollback.conf.example"):
+            (work / "deploy" / "rollback-helpers" / name).write_text("# not installed\n")
         self.pin_helper_sha = sha(self.pin_files["rollback_helper.py"])
         git = ["git", "-C", str(work), "-c", "user.name=Alfred", "-c", "user.email=a@wayne.invalid"]
         subprocess.run([*git[:3], "init", "-q", "-b", "main"], check=True)
@@ -1014,7 +1023,7 @@ class P6Base(unittest.TestCase):
         )
 
     def extra_subs(self) -> dict[str, str]:
-        return {"LIBDIR": str(self.libdir)} if self.SCRIPT == "r2-p6-reinstall.sh" else {}
+        return {"LIBDIR": str(self.libdir)}
 
     @property
     def saved(self) -> Path:
@@ -1044,14 +1053,16 @@ class P6Base(unittest.TestCase):
     def write_conf(self, body: str) -> None:
         self.conf.write_text(body)
 
-    def run_script(self, *args: str) -> subprocess.CompletedProcess:
-        self.box.shims.joinpath("sudo-l").touch()
-        extra = {
+    def run_env(self) -> dict[str, str]:
+        return {
             "INSTALL_LOG": str(self.installlog),
             "AFTER_CONF": str(self.after),
             "CONF_PATH": str(self.conf),
         }
-        return self.box.run(self.script, *args, extra=extra)
+
+    def run_script(self, *args: str) -> subprocess.CompletedProcess:
+        self.box.shims.joinpath("sudo-l").touch()
+        return self.box.run(self.script, *args, extra=self.run_env())
 
     def installs(self) -> list[str]:
         return self.installlog.read_text().splitlines() if self.installlog.exists() else []
@@ -1296,8 +1307,12 @@ class UndoScript(P6Base):
         "offline_env = HOME={state} ABO_CORE_PATHS_STATE_DIR={state}\nexport_dir = {export}\n"
     )
 
+    def run_env(self) -> dict[str, str]:
+        return {**super().run_env(), "LIBDIR_PATH": str(self.libdir), **self.break_install}
+
     def setUp(self) -> None:
         super().setUp()
+        self.break_install: dict[str, str] = {}
         self.export_dir.mkdir(mode=0o700)
         self.undone()
         self.save_before()
@@ -1357,6 +1372,8 @@ class UndoScript(P6Base):
         for s in STUBS:
             self.assertIn(f"sudoers no longer grants {s}", p.stdout)
         self.assertEqual(len(self.installs()), 2)
+        for name in self.pin_files:
+            self.assertIn(f"ok: installed {name} is the one saved before P6", p.stdout)
         # Again after a success: the save was retired, so there is nothing to put back.
         again = self.run_script()
         self.assertNotEqual(again.returncode, 0, text(again))
@@ -1413,6 +1430,91 @@ class UndoScript(P6Base):
             self.assertIn(f"ok: {name}", p.stdout)
         self.assertIn("every file in this checkout's bundle is the one P6 replaced", p.stdout)
 
+    def refused_before_anything(self, label: str, why: str) -> subprocess.CompletedProcess:
+        out_ = None
+        for flags in ((), ("--dry-run",)):
+            out_ = self.run_script(*flags)
+            self.assertNotEqual(out_.returncode, 0, f"{label} {flags}\n{text(out_)}")
+            self.assertIn(why, out_.stdout + out_.stderr, f"{label} {flags}")
+            self.assertEqual(self.installs(), [], label)
+            self.assertEqual(self.box.sudo_calls(), [], label)
+        assert out_ is not None
+        return out_
+
+    def test_a_list_cut_short_is_refused_not_half_checked(self) -> None:
+        full = self.pin_manifest()
+        lines = full.splitlines(keepends=True)
+        last = lines[-1].split()[1]
+        # The last line has lost only its newline: `while read` alone would skip it.
+        self.save_before(manifest=full.rstrip("\n"))
+        p = self.refused_before_anything("no final newline", "does not end in a newline")
+        self.assertIn(f"ok: {last}", p.stdout, "the unterminated line is still checked")
+        # Cut inside the last line (the helper's, which sorts last): its line is gone.
+        self.save_before(manifest=full[: -(len(lines[-1]) // 2)])
+        self.refused_before_anything("cut mid-line", "no rollback_helper.py line")
+        # Whole lines gone, every remaining line intact and newline-terminated.
+        lost = lines[1].split()[1]  # not the helper's line: that has its own refusal
+        self.save_before(manifest=lines[0] + "".join(lines[2:]))
+        p = self.refused_before_anything("a line missing", "does not name the files")
+        self.assertIn(f"names {len(lines) - 1} files", p.stdout)
+        self.assertIn(f"installs {len(lines)}", p.stdout)
+        self.assertIn(f"-{lost}", p.stdout)
+        # A line twice.
+        self.save_before(manifest=full + lines[0])
+        self.refused_before_anything("a duplicate line", "does not name the files")
+        # Not touched by any of that, and the whole list still passes.
+        self.save_before()
+        self.assertEqual(self.run_script("--dry-run").returncode, 0)
+
+    def test_files_that_are_in_the_helper_directory_but_not_installed_are_not_expected(
+        self,
+    ) -> None:
+        # The PIN checkout has install_helpers.py and rollback.conf.example beside the
+        # bundle; a saved list without them is the right one, a list with them is not.
+        for extra in ("install_helpers.py", "rollback.conf.example"):
+            self.save_before(manifest=self.pin_manifest(**{extra: sha(b"# not installed\n")}))
+            self.refused_before_anything(extra, "does not name the files")
+        self.save_before()
+        self.assertEqual(self.run_script("--dry-run").returncode, 0)
+
+    def test_installed_files_that_are_not_the_saved_ones_fail_loudly(self) -> None:
+        for label, env, why in (
+            (
+                "a file with other bytes",
+                {"LIBDIR_BREAK": "restore-offline"},
+                "restore-offline has sha256",
+            ),
+            (
+                "a file that is not there",
+                {"LIBDIR_DROP": "audiobook-organizer.service"},
+                "unreadable or missing",
+            ),
+        ):
+            self.break_install = env
+            self.save_before()
+            self.undone()
+            self.export_dir.mkdir(mode=0o700, exist_ok=True)
+            p = self.run_script()
+            self.assertNotEqual(p.returncode, 0, f"{label}\n{text(p)}")
+            self.assertIn("WRONG: installed", p.stdout, label)
+            self.assertIn(why, p.stdout, label)
+            self.assertIn("the installed files do not match", p.stdout, label)
+            self.assertIn("send this output to the agents", p.stderr, label)
+            self.assertTrue(self.saved.exists(), "a failed undo keeps the save")
+            self.assertEqual(len(list(self.saved.parent.glob("p6-before.undone-*"))), 0, label)
+        # Files that do match: it passes.
+        self.break_install = {}
+        self.save_before()
+        self.undone()
+        self.export_dir.mkdir(mode=0o700, exist_ok=True)
+        self.assertEqual(self.run_script().returncode, 0)
+
+    def test_a_dry_run_does_not_look_at_installed_files(self) -> None:
+        self.break_install = {"LIBDIR_BREAK": "restore-offline"}
+        p = self.run_script("--dry-run")
+        self.assertEqual(p.returncode, 0, text(p))
+        self.assertNotIn("installed restore-offline", p.stdout)
+
     def test_a_saved_listing_that_is_empty_or_incomplete_is_refused_before_anything(self) -> None:
         for label, listing in (
             ("empty", ""),
@@ -1435,12 +1537,7 @@ class UndoScript(P6Base):
             listing + '    (root) NOPASSWD: /usr/bin/whoami ""\n'
         )
         # run_script would rewrite the listing; run the script with it as written.
-        extra = {
-            "INSTALL_LOG": str(self.installlog),
-            "AFTER_CONF": str(self.after),
-            "CONF_PATH": str(self.conf),
-        }
-        p = self.box.run(self.script, extra=extra)
+        p = self.box.run(self.script, extra=self.run_env())
         self.assertNotEqual(p.returncode, 0, text(p))
         self.assertIn("/usr/bin/whoami", p.stdout)
         self.assertIn("differs from the one saved before P6", p.stdout)
@@ -1481,13 +1578,8 @@ class UndoScript(P6Base):
     def run_with_listing(self, body: str) -> None:
         """Run the script with this exact `sudo -n -l` text (run_script's own
         helper would replace it)."""
-        extra = {
-            "INSTALL_LOG": str(self.installlog),
-            "AFTER_CONF": str(self.after),
-            "CONF_PATH": str(self.conf),
-        }
         (self.box.shims / "sudo-l").write_text(body)
-        self.last = self.box.run(self.script, extra=extra)
+        self.last = self.box.run(self.script, extra=self.run_env())
 
     def test_a_restored_conf_that_differs_from_the_saved_one_fails_with_the_diff(self) -> None:
         self.save_before(conf=self.after.read_text() + "# a line the old file had\n")
@@ -1662,6 +1754,32 @@ class ServiceScripts(unittest.TestCase):
             self.assertEqual(p.returncode, 0, text(p))
             self.assertIn(f"{prop} is infinity, so 900 s", p.stdout)
             self.assertIn("wait up to 960 s", p.stdout)
+
+    def test_a_zero_timeout_means_no_timeout_and_uses_the_same_fallback(self) -> None:
+        # systemd turns a Timeout*Sec of 0 into infinity, so a 0 is "no timeout", not
+        # "give up at once" and not something to refuse.
+        for verb, now, prop in (
+            ("start", "inactive", "TimeoutStartUSec"),
+            ("stop", "active", "TimeoutStopUSec"),
+        ):
+            for shown in ("0", "0s", "0us", "0min"):
+                self.box.set_state(now)
+                p = self.derived(verb, shown, "--dry-run")
+                self.assertEqual(p.returncode, 0, f"{verb} {shown}\n{text(p)}")
+                self.assertIn(
+                    f"{prop} is {shown}, which systemd reads as no timeout, so 900 s", p.stdout
+                )
+                self.assertIn("wait up to 960 s", p.stdout, f"{verb} {shown}")
+            # A real run waits that long, not zero seconds: the unit stays activating.
+        self.box.set_state("inactive")
+        (self.box.shims / "change.result").write_text("activating")
+        p = self.derived("start", "0", MARGIN_SEC="0", FALLBACK_SEC="1")
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("still activating after 1 seconds; wanted active", p.stderr)
+        # Close to zero is still a timeout.
+        self.box.set_state("inactive")
+        p = self.derived("start", "0.5s", "--dry-run")
+        self.assertIn("wait up to 61 s", p.stdout)
 
     def test_a_timeout_that_cannot_be_read_changes_nothing(self) -> None:
         for verb, now, shown in (

@@ -203,6 +203,23 @@ class ServiceTargets(unittest.TestCase):
         self.assertIn("is infinity, so 900 s", p.stdout)
         self.assertIn("wait up to 960 s", p.stdout)
 
+    def test_a_zero_timeout_means_no_timeout_and_uses_the_same_fallback(self) -> None:
+        # systemd turns a Timeout*Sec of 0 into infinity, so a 0 is "no timeout", not
+        # "give up at once" and not something to refuse.
+        for target, prop, now in (
+            ("service-start", "TimeoutStartUSec", "inactive"),
+            ("service-stop", "TimeoutStopUSec", "active"),
+        ):
+            for shown in ("0", "0s", "0us"):
+                host = self.host(unit_state(now), rules=timeout_rules(start=shown, stop=shown))
+                host.h["env"].pop("AORG_OH_WAIT_SEC")
+                p = host.make(target, DRY_RUN="1")
+                self.assertEqual(p.returncode, 0, f"{target} {shown}\n{out(p)}")
+                self.assertIn(
+                    f"{prop} is {shown}, which systemd reads as no timeout, so 900 s", p.stdout
+                )
+                self.assertIn("wait up to 960 s", p.stdout)
+
     def test_the_commands_are_the_guards_stop_and_start_keys(self) -> None:
         o = guard.Opts(host="h", db="", bin="", unit=UNIT)
         self.assertEqual(guard.commands(o)["stop"], STOP)
@@ -218,6 +235,10 @@ class TimespanAndLimits(unittest.TestCase):
             ("1h 2min 3.5s", 3723.5),
             ("90s", 90),
             ("infinity", None),
+            ("0", None),
+            ("0s", None),
+            ("0us", None),
+            ("0.5s", 0.5),
         ):
             self.assertEqual(scm.timespan_seconds(text), want, text)
         for bad in ("", "soon", "5 min", "5minutes", "-1s", "1min,30s"):
