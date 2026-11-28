@@ -471,3 +471,16 @@ func TestBookRelocated_ImportMoveStagesNothing(t *testing.T) {
 		t.Fatalf("an import's file re-point staged %d relocations, want 0: %+v", len(got), got)
 	}
 }
+
+// RelocationOutboxInstalled is what the boot check (audiobooks.RequireRelocationOutbox)
+// reads: false until SetRelocationOutbox runs, true after.
+func TestBookRelocated_InstalledReportsTheOutbox(t *testing.T) {
+	r := newRelocationRig(t, false)
+	if r.store.RelocationOutboxInstalled() {
+		t.Fatal("a store reports a relocation outbox before SetRelocationOutbox")
+	}
+	r.store.SetRelocationOutbox(r.ob.Writer("books"))
+	if !r.store.RelocationOutboxInstalled() {
+		t.Fatal("a store reports no relocation outbox after SetRelocationOutbox")
+	}
+}

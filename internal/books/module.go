@@ -263,6 +263,8 @@ func (m *booksModule) Manifest() module.Manifest {
 		// and books' one seed role (identity_declarations.go): declared only
 		// when the flip is, so a boot without it declares nothing to rbac.
 		mf.Permissions, mf.Roles, mf.ImportedRoleIDs = booksPermissions(), booksRoles(), booksImportedRoleIDs()
+	}
+	if relocationFollowUpOn() {
 		// The outbox consumers books registers (Register's OutboxHandler), listed
 		// so the kernel declares them for a disabled books too and keeps the
 		// messages staged for them (TestDisabledModuleOutboxRetained).
@@ -368,6 +370,8 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		// relocation follow-up. The consumer starts a task run, so it is the one
 		// kind of handler a module may register (ConsumeIntoTask).
 		r.Topics(database.BookChangedTopicSpec(), database.BookRelocatedTopicSpec())
+	}
+	if relocationFollowUpOn() {
 		r.OutboxHandler(deluge.RelocationConsumer())
 	}
 	legacy := r.Deps().Storage.Legacy
@@ -428,11 +432,13 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		}
 	}
 	database.SetGlobalStore(store)
-	if out := r.Deps().Outbox; out != (outbox.Writer{}) {
+	if out := r.Deps().Outbox; relocationFollowUpOn() && out != (outbox.Writer{}) {
 		// Before anything writes through the store: the organized copy of a
 		// single-book organize (CreateBookWithRelocation) stages
 		// books.book.relocated.v1 in the batch that creates the copy. No other
-		// write stages it.
+		// write stages it. Only while the consumer that delivers it is
+		// registered (relocationFollowUpOn): a message staged for no consumer
+		// would wait for one, and the follow-up would not run.
 		store.SetRelocationOutbox(out)
 	}
 	// Every committed book write publishes books.book.changed.v1 (the zero
@@ -507,6 +513,12 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	// CreateBookWithRelocation, which database.Store does not carry, so a store
 	// that lost it stops the boot here rather than every Deluge move silently.
 	if err := audiobooks.RequireRelocatingCopyCreator(store); err != nil {
+		return err
+	}
+	// And with the follow-up wired, a store that stages nothing (no outbox was
+	// installed: the boot has no core outbox, or the install above was skipped)
+	// would copy the book and never move its torrents: refuse the boot.
+	if err := requireRelocationWiring(store); err != nil {
 		return err
 	}
 	// A refusal comes back as an error, and NewServer has released whatever it

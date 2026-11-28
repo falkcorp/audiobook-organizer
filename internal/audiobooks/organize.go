@@ -76,6 +76,26 @@ func RequireRelocatingCopyCreator(store any) error {
 	return nil
 }
 
+// relocationOutboxProbe is what RequireRelocationOutbox asks the store.
+type relocationOutboxProbe interface{ RelocationOutboxInstalled() bool }
+
+// RequireRelocationOutbox is the boot check for the durable follow-up (F6-03):
+// it fails when store cannot say that a relocation outbox is installed, or says
+// none is. Books' module Register calls it, with the follow-up wired, after
+// RequireRelocatingCopyCreator: a store that implements the copy write but has
+// no outbox creates the organized copy and stages nothing, so no torrent ever
+// moves, and nothing fails until someone notices the Deluge paths.
+func RequireRelocationOutbox(store any) error {
+	p, ok := store.(relocationOutboxProbe)
+	if !ok {
+		return fmt.Errorf("audiobooks: the store %T cannot report whether a relocation outbox is installed (RelocationOutboxInstalled)", store)
+	}
+	if !p.RelocationOutboxInstalled() {
+		return fmt.Errorf("audiobooks: the relocation follow-up is wired but the store %T has no relocation outbox installed: an organized copy would stage nothing and its torrents would never move", store)
+	}
+	return nil
+}
+
 // NewOrganizeService creates a new organizer.Service and wires up
 // server-specific callbacks (isProtectedPath, iTunes discovery, etc.).
 func NewOrganizeService(db organizeServiceStore) *OrganizeService {
