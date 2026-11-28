@@ -67,7 +67,7 @@ Switch configuration and secrets to core in one PR, with every first-party consu
    "Flip mechanism"; F3-06): level steps named by target level, one per owner at this first flip, and M8 under its one
    R2 ID, registered here once and last (later flips insert their steps before it and never replace it). Pass
    `RetiredConfigNames` and `ConfigEnvBindings` (`OPENAI_API_KEY`, `OPENAI_BASE_URL` onto
-   `integrations.ai.openai.{api_key, base_url}`) from ABO's `main`.
+   `integrations.ai.openai.{api_key, url}`) from ABO's `main`.
 4. **Delete `R1Values`** and its type from `core/app/options.go` and ABO's `main`, with an archtest that fails if either
    is present (05-config §1.12.1, 06 §6.4.10 F3 row). The perimeter keys become hot-reloadable core keys;
    `core.shutdown.budget` is read through core config.

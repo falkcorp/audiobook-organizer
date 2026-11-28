@@ -17,35 +17,39 @@ import (
 	"github.com/falkcorp/mediacore/integrations"
 )
 
-// operatorURL is where one operator path's URL lands: the instance it belongs to
-// and the settings field the URL is stored in.
-type operatorURL struct {
-	ref   integrations.Ref
-	field string
-}
-
 // operatorURLPaths is the closed set of operator-layer paths that carry an
 // integration's URL setting. It is the whole of what Config.Effective can
 // answer, because HEAD's environment and config file supplied exactly two URLs
 // (OPENAI_BASE_URL and the Deluge web URL).
 //
-// The openai row is a rename, not a copy: HEAD's name and the operator path both
-// say base_url, while the native ai/openai instance stores the URL as the
-// settings field url (openAIInstance sets settings["url"], and pending.finish
-// looks the overlay up under that same key). A builder that kept base_url would
-// hand pending.finish a field it never reads, and the instance would be signed
-// from the stored URL instead of the operator's.
+// A path is integrations.<kind>.<instance>.<field>, and the overlay is keyed by
+// its last segment, the way core keys it (core/integrations opPaths): the
+// segment IS the adapter's settings field. That is why the openai path is
+// integrations.ai.openai.url and not base_url: the rename table retargets HEAD's
+// openai_base_url and the OPENAI_BASE_URL binding onto the adapter's field name,
+// so a value an operator supplies lands in the field core overlays and M6 signs.
 //
 // This is a table, not a derivation from the rename table: that table marks the
 // email host and port as destinations too (they are a host-and-port pair, not
-// URL settings), names no settings field, and cannot be imported from here
-// (cutover imports this package). The pin runs the other way round:
-// TestOperatorURLPaths_AccountForEveryPassthroughRow walks the rename table and
-// the env bindings and fails on a passthrough path that is neither in this table
-// nor in notURLPaths.
-var operatorURLPaths = map[config.Path]operatorURL{
-	"integrations.ai.openai.base_url":  {ref: integrations.Ref{Kind: integrations.KindAI, Instance: instanceOpenAI}, field: "url"},
-	"integrations.download.deluge.url": {ref: integrations.Ref{Kind: integrations.KindDownload, Instance: instanceDeluge}, field: "url"},
+// URL settings), and cannot be imported from here (cutover imports this
+// package). The pins run the other way round: the m6_test pins walk the rename
+// table and the env bindings, require every passthrough path to be mapped here
+// or listed in notURLPaths, and require each mapped path to be a URL-typed field
+// of its adapter's Settings.
+var operatorURLPaths = map[config.Path]struct{}{
+	"integrations.ai.openai.url":       {},
+	"integrations.download.deluge.url": {},
+}
+
+// operatorField splits an operator path into the instance and the settings
+// field, as core's opPaths does: four dot-separated segments, the last being the
+// field. ok is false for any other shape.
+func operatorField(p config.Path) (ref integrations.Ref, field string, ok bool) {
+	segs := strings.Split(string(p), ".")
+	if len(segs) != 4 || segs[0] != "integrations" {
+		return integrations.Ref{}, "", false
+	}
+	return integrations.Ref{Kind: integrations.Kind(segs[1]), Instance: integrations.InstanceID(segs[2])}, segs[3], true
 }
 
 // notURLPaths are the integrations passthrough paths that are deliberately not
@@ -85,24 +89,27 @@ func EffectiveFromPassthrough(values iter.Seq2[config.Path, config.OperatorValue
 	bad := map[integrations.Ref]error{}
 	if values != nil {
 		for p, v := range values {
-			dest, ok := operatorURLPaths[p]
+			if _, ok := operatorURLPaths[p]; !ok {
+				continue
+			}
+			ref, field, ok := operatorField(p)
 			if !ok {
 				continue
 			}
 			var s string
 			if err := json.Unmarshal(v.Value, &s); err != nil {
-				if _, seen := bad[dest.ref]; !seen {
-					bad[dest.ref] = fmt.Errorf("m6: the operator value %s (from %s) is not a string URL", p, v.By)
+				if _, seen := bad[ref]; !seen {
+					bad[ref] = fmt.Errorf("m6: the operator value %s (from %s) is not a string URL", p, v.By)
 				}
 				continue
 			}
 			if strings.TrimSpace(s) == "" {
 				continue
 			}
-			if urls[dest.ref] == nil {
-				urls[dest.ref] = map[string]string{}
+			if urls[ref] == nil {
+				urls[ref] = map[string]string{}
 			}
-			urls[dest.ref][dest.field] = s
+			urls[ref][field] = s
 		}
 	}
 	return func(_ context.Context, ref integrations.Ref) (map[string]string, error) {

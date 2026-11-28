@@ -7,12 +7,12 @@ package m6
 
 import "github.com/falkcorp/mediacore/config"
 
-// OperatorURLField is the settings field and ref that path's operator value
-// lands in, for the pin test in m6_test (which imports cutover and so cannot be
-// an internal test).
-func OperatorURLField(p config.Path) (ref, field string, ok bool) {
-	d, ok := operatorURLPaths[p]
-	return d.ref.String(), d.field, ok
+// OperatorField is operatorField for the pin tests in m6_test (which import
+// cutover and so cannot be internal tests): the ref and settings field an
+// operator path lands in.
+func OperatorField(p config.Path) (ref, field string, ok bool) {
+	r, field, ok := operatorField(p)
+	return r.String(), field, ok
 }
 
 // AccountedFor reports whether the builder either maps p or lists it as
@@ -23,6 +23,15 @@ func AccountedFor(p config.Path) bool {
 	}
 	_, ok := notURLPaths[p]
 	return ok
+}
+
+// URLPaths are the mapped operator URL paths.
+func URLPaths() []config.Path {
+	var out []config.Path
+	for p := range operatorURLPaths {
+		out = append(out, p)
+	}
+	return out
 }
 
 // URLPathsAndNotURLPaths are both tables' paths, for asserting each is a real

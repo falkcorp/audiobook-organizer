@@ -121,7 +121,7 @@ var explicitRows = []explicitRow{
 	{head: "google_books_api_key", class: ClassSecret, stored: StoredRow, targets: []Target{tpassSecret("integrations.metadata.google-books.api_key")}, note: "encrypted row"},
 	{head: "openai_api_key", class: ClassSecret, stored: StoredRow, targets: []Target{tpassSecret("integrations.ai.openai.api_key")}, note: "encrypted row"},
 	{head: "acoustid_api_key", class: ClassSecret, targets: []Target{ts("modules.books.acoustid.api_key")}, note: "plaintext in the blob"},
-	{head: "openai_base_url", class: ClassInput, targets: []Target{tpass("integrations.ai.openai.base_url", true)}},
+	{head: "openai_base_url", class: ClassInput, targets: []Target{tpass("integrations.ai.openai.url", true)}},
 	{head: "otel_exporter_otlp_endpoint", targets: []Target{tk("core.tracing.otlp.endpoint", "")}, admin: true},
 	{head: "otel_metrics_otlp_endpoint", targets: []Target{tk("core.metrics.otlp.endpoint", "")}, admin: true},
 	{head: "otel_metrics_otlp_interval", targets: []Target{tk("core.metrics.otlp.interval", "")}, note: "bare integer = ms"},

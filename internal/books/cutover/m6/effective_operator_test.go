@@ -10,12 +10,15 @@ import (
 	"encoding/json"
 	"iter"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/integrations"
+	"github.com/falkcorp/mediacore/integrations/ai/openai"
+	"github.com/falkcorp/mediacore/integrations/download/deluge"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover/m6"
@@ -24,7 +27,7 @@ import (
 // The operator URLs these tests supply sit in the reserved 192.0.2.0/24 and
 // .invalid ranges, so no fixture holds a real host.
 const (
-	openAIPath  = config.Path("integrations.ai.openai.base_url")
+	openAIPath  = config.Path("integrations.ai.openai.url")
 	delugePath  = config.Path("integrations.download.deluge.url")
 	delugeURL   = "http://192.0.2.99:8112/deluge-web"
 	openAIURL   = "https://wayne-llm.invalid:8443/v1"
@@ -97,16 +100,19 @@ func TestEffectiveFromPassthrough_BothRefs(t *testing.T) {
 	}
 }
 
-// TestEffectiveFromPassthrough_OpenAIBaseURLIsTheUrlField: the operator path says
-// base_url, the native ai/openai instance stores the URL as url. The overlay is
-// keyed by the field the instance reads, never by the path's last segment.
-func TestEffectiveFromPassthrough_OpenAIBaseURLIsTheUrlField(t *testing.T) {
+// TestEffectiveFromPassthrough_FieldIsThePathsLastSegment: the overlay is keyed
+// by the operator path's last segment, as core keys it, and that segment is the
+// adapter's settings field, so the openai path is .url. HEAD's old spelling,
+// integrations.ai.openai.base_url, is no operator URL any more: the rename table
+// no longer sends anything there, and core would drop the unknown field.
+func TestEffectiveFromPassthrough_FieldIsThePathsLastSegment(t *testing.T) {
 	got := effective(t, seq(opVal{openAIPath, quoted(t, openAIURL), "env OPENAI_BASE_URL"}), openAIRef)
-	if _, kept := got["base_url"]; kept {
-		t.Errorf("the overlay carries the operator path's name base_url: %v", got)
+	if !maps.Equal(got, map[string]string{"url": openAIURL}) {
+		t.Errorf("ai/openai %v, want the url field alone", got)
 	}
-	if got["url"] != openAIURL {
-		t.Errorf("ai/openai url %q, want %q (%v)", got["url"], openAIURL, got)
+	old := seq(opVal{"integrations.ai.openai.base_url", quoted(t, openAIURL), "env OPENAI_BASE_URL"})
+	if got := effective(t, old, openAIRef); got != nil {
+		t.Errorf("the retired spelling base_url answers %v, want no overlay", got)
 	}
 }
 
@@ -320,7 +326,7 @@ func TestOperatorURLPaths_AccountForEveryPassthroughRow(t *testing.T) {
 		}
 	}
 	// The check can fail: a path no table names is not accounted for.
-	for _, p := range []config.Path{"integrations.download.deluge.base_url", "integrations.ai.openai.url", "integrations.notify.email.tls_url"} {
+	for _, p := range []config.Path{"integrations.download.deluge.base_url", "integrations.ai.openai.base_url", "integrations.notify.email.tls_url"} {
 		if m6.AccountedFor(p) {
 			t.Errorf("%s is accounted for though no table names it", p)
 		}
@@ -328,8 +334,8 @@ func TestOperatorURLPaths_AccountForEveryPassthroughRow(t *testing.T) {
 }
 
 // TestOperatorURLPaths_AreRealPassthroughPaths: both tables name only paths core
-// config will accept as passthrough, so a typo in either is not a silent dead row.
-// Every mapped path also lands on a ref and a field.
+// config will accept as passthrough, so a typo in either is not a silent dead
+// row, and every mapped path lands on the ref and field the tests expect.
 func TestOperatorURLPaths_AreRealPassthroughPaths(t *testing.T) {
 	all := m6.URLPathsAndNotURLPaths()
 	if len(all) < 6 {
@@ -344,9 +350,89 @@ func TestOperatorURLPaths_AreRealPassthroughPaths(t *testing.T) {
 		openAIPath: {openAIRef.String(), "url"},
 		delugePath: {delugeRef.String(), delugeField},
 	} {
-		ref, field, ok := m6.OperatorURLField(p)
+		ref, field, ok := m6.OperatorField(p)
 		if !ok || ref != want[0] || field != want[1] {
 			t.Errorf("%s maps to %s/%s (%v), want %s/%s", p, ref, field, ok, want[0], want[1])
+		}
+	}
+}
+
+// jsonFields is the JSON field names of a settings struct, embedded structs
+// flattened as encoding/json does, each with its schema tag.
+func jsonFields(t reflect.Type) map[string]string {
+	out := map[string]string{}
+	for i := range t.NumField() {
+		f := t.Field(i)
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if f.Anonymous && name == "" && f.Type.Kind() == reflect.Struct {
+			maps.Copy(out, jsonFields(f.Type))
+			continue
+		}
+		if name == "" || name == "-" {
+			continue
+		}
+		out[name] = f.Tag.Get("schema")
+	}
+	return out
+}
+
+// TestOperatorURLPaths_FieldsAreAdapterSettings pins the invariant the overlay
+// rests on: core keys an operator value by the path's last segment, so for every
+// integrations passthrough path the rename table and the env bindings name under
+// an instance whose adapter is in the binary, that segment is a json field of the
+// adapter's Settings; and the mapped URL paths are exactly the URL-typed
+// (schema format=uri) fields of those Settings, no more and no fewer. The old
+// base_url spelling fails the first check and is why openai's path is .url.
+func TestOperatorURLPaths_FieldsAreAdapterSettings(t *testing.T) {
+	settings := map[string]map[string]string{
+		openAIRef.String(): jsonFields(reflect.TypeFor[openai.Settings]()),
+		delugeRef.String(): jsonFields(reflect.TypeFor[deluge.Settings]()),
+	}
+	if !slices.Contains(slices.Collect(maps.Keys(settings[openAIRef.String()])), "url") || len(settings[delugeRef.String()]) != 3 {
+		t.Fatalf("the reflected Settings look wrong: %v", settings)
+	}
+	var paths []config.Path
+	for _, row := range cutover.Table().Rows {
+		for _, tg := range row.Targets {
+			if tg.Kind == cutover.TargetPassthrough || tg.Kind == cutover.TargetSecret && tg.Passthrough {
+				paths = append(paths, config.Path(tg.Path))
+			}
+		}
+	}
+	for _, b := range cutover.ConfigEnvBindings() {
+		paths = append(paths, b.Path)
+	}
+	checked := 0
+	for _, p := range paths {
+		ref, field, ok := m6.OperatorField(p)
+		if !ok {
+			continue // a family path (metadata sources, webhook secrets): no single adapter
+		}
+		fields, known := settings[ref]
+		if !known {
+			continue
+		}
+		checked++
+		if _, isField := fields[field]; !isField {
+			t.Errorf("%s: %q is not a json field of %s's Settings %v", p, field, ref, slices.Sorted(maps.Keys(fields)))
+		}
+	}
+	if checked < 4 {
+		t.Fatalf("only %d passthrough paths were checked against a Settings type: the walk found nothing", checked)
+	}
+	mapped := map[string]bool{}
+	for _, p := range m6.URLPaths() {
+		ref, field, _ := m6.OperatorField(p)
+		if tag := settings[ref][field]; !strings.Contains(tag, "format=uri") {
+			t.Errorf("%s is mapped as an operator URL but %s.%s is not a URL-typed Settings field (schema %q)", p, ref, field, tag)
+		}
+		mapped[ref+"."+field] = true
+	}
+	for ref, fields := range settings {
+		for field, tag := range fields {
+			if strings.Contains(tag, "format=uri") && !mapped[ref+"."+field] {
+				t.Errorf("%s.%s is a URL-typed Settings field with no operator URL mapping", ref, field)
+			}
 		}
 	}
 }

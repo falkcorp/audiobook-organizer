@@ -49,7 +49,7 @@ func TestSecretAdmit_IsTheTableAndNothingElse(t *testing.T) {
 		t.Fatalf("only %d secret targets in the table; the golden lists 15", n)
 	}
 	for _, out := range []secrets.Name{
-		"modules.bane.venom", "core.http.basic_gate.user", "integrations.ai.openai.base_url",
+		"modules.bane.venom", "core.http.basic_gate.user", "integrations.ai.openai.url",
 		"integrations.metadata..credentials.key", "integrations.notify.webhook-3", "", "core",
 	} {
 		if admit(out) {

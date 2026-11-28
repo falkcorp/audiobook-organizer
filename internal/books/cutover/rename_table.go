@@ -863,7 +863,7 @@ func RetiredConfigNames() []config.RetiredName {
 func ConfigEnvBindings() []config.EnvName {
 	return []config.EnvName{
 		{Name: "OPENAI_API_KEY", Path: "integrations.ai.openai.api_key"},
-		{Name: "OPENAI_BASE_URL", Path: "integrations.ai.openai.base_url"},
+		{Name: "OPENAI_BASE_URL", Path: "integrations.ai.openai.url"},
 	}
 }
 

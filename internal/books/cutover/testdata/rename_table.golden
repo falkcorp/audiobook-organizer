@@ -291,9 +291,9 @@ retired env WHISPER_MAX_IN_FLIGHT -> modules.books.whisper.max_in_flight warn
 
 ## openai_base_url
 top=true stored=blob class=i blob=openai_base_url admin=false fail-closed=false url=true
-target passthrough integrations.ai.openai.base_url convert=- destination env=ABO_INTEGRATIONS_AI_OPENAI_BASE_URL
-retired file openai_base_url -> integrations.ai.openai.base_url refuse Refuse
-retired env OPENAI_BASE_URL -> integrations.ai.openai.base_url kept
+target passthrough integrations.ai.openai.url convert=- destination env=ABO_INTEGRATIONS_AI_OPENAI_URL
+retired file openai_base_url -> integrations.ai.openai.url refuse Refuse
+retired env OPENAI_BASE_URL -> integrations.ai.openai.url kept
 
 ## abs_auth_probe_enabled
 top=true stored=blob class=k blob=abs_auth_probe_enabled admin=false fail-closed=false url=false
