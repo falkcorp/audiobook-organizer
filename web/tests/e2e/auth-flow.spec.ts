@@ -3,9 +3,38 @@
 // guid: 9b9cd01d-ea34-4d87-bc84-f390b6ef10cd
 // last-edited: 2026-08-09
 
-import { test, expect } from '@playwright/test';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { test, expect, type Page } from '@playwright/test';
 import { setupPhase2Interactive } from './utils/test-helpers';
 import { paths, urlEndsWith } from './utils/paths';
+import { E2E_TMP_PREFIX } from './e2e-env';
+
+// Core's first-run setup needs the bootstrap token (core.auth.setup_requires_token is true by
+// default). The server writes it beside its database at boot, as .bootstrap-token, and
+// playwright.config.ts starts the server with --db ${E2E_TMP_PREFIX}-db/e2e.pebble.
+const BOOTSTRAP_TOKEN_FILE = join(`${E2E_TMP_PREFIX}-db`, '.bootstrap-token');
+
+/**
+ * GET /api/core/v1/me with the page's cookies: 200 and the named user means the session is real.
+ * The SPA's own start-up burst (about 20 requests in a second) drains core's per-client rate
+ * bucket (100 a minute, burst 20), so a 429 here is the limiter, not the session: poll past it.
+ */
+async function expectSignedInAs(page: Page, username: string) {
+  let last: { status: number; username?: string } = { status: 0 };
+  await expect
+    .poll(
+      async () => {
+        const me = await page.request.get('/api/core/v1/me');
+        const body = me.ok() ? ((await me.json()) as { user?: { username?: string } }) : undefined;
+        last = { status: me.status(), username: body?.user?.username };
+        return last.status;
+      },
+      { message: 'GET /api/core/v1/me with the browser session', timeout: 15000 }
+    )
+    .toBe(200);
+  expect(last.username).toBe(username);
+}
 
 test.describe('Authentication Flow', () => {
   test('redirects protected routes to login when auth is required', async ({
@@ -108,22 +137,36 @@ test.describe('Authentication — Real Server Smoke', () => {
       return;
     }
 
-    // Fresh DB: exercise the real first-run path.
+    // Fresh DB: exercise the real first-run path. Setup is refused (403 setup_closed) without the
+    // bootstrap token, so the token the server wrote at boot is part of the flow, as an operator's is.
+    if (!existsSync(BOOTSTRAP_TOKEN_FILE)) {
+      const why = `no bootstrap token at ${BOOTSTRAP_TOKEN_FILE}: this server was not started by playwright.config.ts`;
+      if (process.env.CI) throw new Error(why); // CI starts the server itself: a missing token is a failure
+      test.skip(true, why);
+      return;
+    }
+    const bootstrapToken = readFileSync(BOOTSTRAP_TOKEN_FILE, 'utf8').trim();
+
     await page.goto(paths.login);
     await expect(
       page.getByRole('heading', { name: 'Create Admin Account' })
     ).toBeVisible({ timeout: 10000 });
 
     await page.getByLabel('Username').fill('e2e-smoke-admin');
+    await page.getByLabel(/Bootstrap token/).fill(bootstrapToken);
     await page.getByLabel('Password').fill('e2e-smoke-pass-9');
     await page.getByRole('button', { name: 'Create And Login' }).click();
 
     // Real session cookie must be set — the redirect only works with a valid cookie.
     await expect(page).toHaveURL(urlEndsWith(paths.dashboard), { timeout: 10000 });
-    await expect(page.getByLabel('logout')).toBeVisible();
+    // The browser's own cookie jar now authenticates against core: /me answers the new admin.
+    // (The header's user chip is not asserted here: a fresh server opens the first-run wizard
+    // over the app, and a modal takes the header out of the accessibility tree.)
+    await expectSignedInAs(page, 'e2e-smoke-admin');
 
     // Confirm the session survives a reload (cookie persists across navigation).
     await page.reload();
     await expect(page).toHaveURL(urlEndsWith(paths.dashboard));
+    await expectSignedInAs(page, 'e2e-smoke-admin');
   });
 });
