@@ -264,6 +264,10 @@ BLOCKERS_DEADLINE_SEC = BLOCKERS_RUNTIME_SEC + 30
 # the unit's output.
 BLOCKERS_PART_LIMIT = 16 << 20
 BLOCKERS_REQUEST = "aorg-cutover-blockers-request.json"
+# cutover-blockers-apply, refused before its unit started: this line on stdout
+# and this exit status mean nothing ran and nothing changed.
+BLOCKERS_NOT_RUN = "NOT-RUN"
+BLOCKERS_NOT_RUN_EXIT = 4
 BLOCKERS_KEY_HEX_MAX = 2048
 # The unit's stdout for a blockers op is a sequence of parts, one frame each:
 # `AORGBLOCKERS1 <part> <length> <sha256>\n` and the bytes. A list run is
@@ -3078,6 +3082,21 @@ def op_blockers_list(args: list[str]) -> int:
 
 
 def op_blockers_apply(args: list[str]) -> int:
+    """Apply the one request in export_dir. A refusal before the unit is
+    started prints BLOCKERS_NOT_RUN on stdout and exits BLOCKERS_NOT_RUN_EXIT:
+    nothing ran and nothing changed, so a wrapper may remove the request it
+    placed. Every other failure may have changed the store (see `after`)."""
+    state = {"started": False}
+    try:
+        return _blockers_apply(args, state)
+    except RefusedError as e:
+        if state["started"]:
+            raise
+        print(BLOCKERS_NOT_RUN, flush=True)
+        raise RefusedError(str(e), BLOCKERS_NOT_RUN_EXIT) from e
+
+
+def _blockers_apply(args: list[str], state: dict[str, bool]) -> int:
     _arity(args, 0, "cutover-blockers-apply (no arguments)")
     cfg = load_config()
     dfd = _export_dir_fd(cfg, "nothing was run")
@@ -3095,6 +3114,7 @@ def op_blockers_apply(args: list[str]) -> int:
             "you are done with it (a fix request holds a value)."
         )
         stdin = json.dumps(request, separators=(",", ":")).encode("ascii")
+        state["started"] = True
         parts = _blockers_collect(cfg, "apply", stdin, after)
         lines = []
         problem = ""

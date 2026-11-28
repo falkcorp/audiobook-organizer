@@ -56,7 +56,7 @@ _STAT_SHIM = """#!{python}
 import os, sys
 a = sys.argv[1:]
 st = os.stat(a[-1])
-print(a[1].replace("%a", oct(st.st_mode & 0o7777)[2:]).replace("%s", str(st.st_size)).replace("%u", str(st.st_uid)))
+print(a[1].replace("%a", oct(st.st_mode & 0o7777)[2:]).replace("%s", str(st.st_size)).replace("%u", str(st.st_uid)).replace("%i", str(st.st_ino)))
 """
 _SHA_SHIM = """#!{python}
 import hashlib, sys
@@ -498,17 +498,57 @@ class Targets(unittest.TestCase):
         self.assertEqual(self.sudos(host), [])
         self.assertEqual((host.export / REQUEST).read_text(), '{"action":"delete","key":"aa"}')
 
-    def test_apply_refuses_while_the_service_is_not_stopped_and_leaves_the_request_to_remove(
-        self,
-    ) -> None:
+    def test_apply_refused_before_it_started_takes_back_the_request_it_sent(self) -> None:
         host = self.host()
         host.transient_state.write_text("active\n")
         req = self.request(host)
         p = host.make("cutover-blockers-apply", OFFHOST_DIR=str(host.dest), REQUEST=str(req))
         self.assert_nothing_copied(host, p)
         self.assertIn("not inactive", out(p))
+        self.assertIn("NOT RUN", out(p))
+        self.assertIn("the request this run sent was removed", out(p))
+        self.assertNotIn("MAY have been applied", out(p))
         self.assertEqual(self.blocker_calls(host), [])
-        self.assertEqual(self.remote_files(host), [REQUEST], "the sent request is still there")
+        self.assertEqual(self.remote_files(host), [], "nothing is left to get stuck")
+        self.assertTrue(req.exists(), "the local request is the caller's")
+        # and the corrected run just works
+        host.transient_state.unlink()
+        p = host.make("cutover-blockers-apply", OFFHOST_DIR=str(host.dest), REQUEST=str(req))
+        self.assertEqual(p.returncode, 0, out(p))
+
+    def test_a_not_run_does_not_remove_a_file_that_is_not_the_one_it_sent(self) -> None:
+        # The helper says NOT-RUN, but the file at the fixed name is by then a
+        # different one (a new inode, made while the old one still exists): it is
+        # left, and the message says so.
+        host = self.host()
+        stub = host.libexec / "cutover-blockers-apply"
+        stub.write_text(
+            "#!/bin/sh\n"
+            f"d={host.export}\n"
+            'echo "another request" > "$d/.new" && mv -f "$d/.new" "$d/' + REQUEST + '"\n'
+            "echo NOT-RUN\nexit 4\n"
+        )
+        stub.chmod(0o755)
+        req = self.request(host)
+        p = host.make("cutover-blockers-apply", OFFHOST_DIR=str(host.dest), REQUEST=str(req))
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertIn("NOT RUN", out(p))
+        self.assertIn("was not removed", out(p))
+        self.assertEqual(self.remote_files(host), [REQUEST])
+        self.assertEqual((host.export / REQUEST).read_text(), "another request\n")
+
+    def test_a_not_run_needs_both_the_exit_status_and_exactly_the_line(self) -> None:
+        for label, resp in (
+            ("status 4, no line", {"exit": 4}),
+            ("the line, status 1", {"stdout": "NOT-RUN\n", "exit": 1}),
+            ("the line plus another", {"stdout": "NOT-RUN\nEXTRA\n", "exit": 4}),
+        ):
+            host = self.host(rules=[{"match": r"cutover-blockers-apply$", "responses": [resp]}])
+            req = self.request(host)
+            p = host.make("cutover-blockers-apply", OFFHOST_DIR=str(host.dest), REQUEST=str(req))
+            self.assertNotEqual(p.returncode, 0, f"{label}\n{out(p)}")
+            self.assertNotIn("NOT RUN", out(p), label)
+            self.assertEqual(self.remote_files(host), [REQUEST], f"{label}: the request stays")
 
     def test_a_success_that_does_not_report_removing_the_request_is_a_failure(self) -> None:
         host = self.host(
@@ -557,7 +597,7 @@ class Targets(unittest.TestCase):
             ("size", "600", len(data) + 1, right),
             ("sha256", "600", len(data), "0" * 64),
         ):
-            forged = f"{mode} {size} {os.getuid()}\n{sha}  {REQUEST}\n"
+            forged = f"{mode} {size} {os.getuid()} 7\n{sha}  {REQUEST}\n"
             host = self.host(
                 rules=[{"match": r"^chmod -- 600 ", "responses": [{"stdout": forged}]}]
             )

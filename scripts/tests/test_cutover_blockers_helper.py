@@ -290,11 +290,17 @@ class Blockers(unittest.TestCase):
         self.assertEqual(code, 0, err)
         return out, err
 
-    def refused(self, *argv: str, code: int = 1, contains: str = "") -> str:
+    def refused(self, *argv: str, code: int | None = None, contains: str = "") -> str:
+        """A refusal. For cutover-blockers-apply the default is a refusal before
+        the unit started: exit status 4 and one NOT-RUN line (pass code=1 for a
+        failure after it started). Nothing is ever EXPORTED."""
+        if code is None:
+            code = self.h.mod.BLOCKERS_NOT_RUN_EXIT if argv[0] == "cutover-blockers-apply" else 1
         before = self.exported()
         got, out, err = self.h.run(*argv)
         self.assertEqual(got, code, err)
-        self.assertEqual(out, "", "a refusal prints no EXPORTED line")
+        want_out = "NOT-RUN\n" if got == self.h.mod.BLOCKERS_NOT_RUN_EXIT else ""
+        self.assertEqual(out, want_out, "a refusal prints no EXPORTED line")
         self.assertIn(contains, err)
         self.assertEqual(self.exported(), before, "a refusal leaves export_dir as it was")
         return err
@@ -606,9 +612,29 @@ class Blockers(unittest.TestCase):
     def test_apply_takes_no_arguments(self):
         self.fix_request()
         for extra in (["x"], [str(self.request)], ["--confirm"], ["fix"]):
-            self.refused("cutover-blockers-apply", *extra, code=2, contains="usage")
+            self.refused("cutover-blockers-apply", *extra, contains="usage")
         self.assertEqual(self.systemd_runs(), [])
         self.assertTrue(self.request.exists())
+
+    def test_every_refusal_before_the_unit_starts_says_not_run_and_none_after_does(self):
+        # Before: exit status 4 and one NOT-RUN line, nothing else on stdout.
+        self.put_request(b"{not json")
+        err = self.refused("cutover-blockers-apply", contains="not one strict JSON object")
+        self.assertNotIn("MAY have been applied", err)
+        self.assertEqual(self.h.mod.BLOCKERS_NOT_RUN_EXIT, 4)
+        # After the unit started: a plain failure, no NOT-RUN, the request stays.
+        self.fix_request()
+        self.mode(bin_="fail")
+        got, out, err = self.h.run("cutover-blockers-apply")
+        self.assertEqual(got, 1)
+        self.assertNotIn("NOT-RUN", out)
+        self.assertTrue(self.request.exists())
+
+    def test_list_refusals_are_not_marked_not_run(self):
+        self.set_state("audiobook-organizer.service", "active")
+        got, out, err = self.h.run("cutover-blockers-list")
+        self.assertEqual(got, 1)
+        self.assertNotIn("NOT-RUN", out)
 
     def test_a_missing_request_refuses(self):
         self.refused("cutover-blockers-apply", contains="cannot open the request")
@@ -853,7 +879,7 @@ class Blockers(unittest.TestCase):
     def test_the_request_stays_when_the_command_fails_and_the_message_says_to_look(self):
         self.fix_request()
         self.mode(bin_="fail")
-        err = self.refused("cutover-blockers-apply", contains="exited 1. The unit started")
+        err = self.refused("cutover-blockers-apply", code=1, contains="exited 1. The unit started")
         self.assertIn("MAY have been applied", err)
         self.assertIn(str(self.request), err)
         p = self.worker("apply", self.request.read_bytes())
@@ -865,11 +891,12 @@ class Blockers(unittest.TestCase):
     def test_the_request_stays_on_a_unit_failure_a_timeout_and_bad_frames(self):
         self.fix_request()
         self.mode(run="fail")
-        self.refused("cutover-blockers-apply", contains="exited 7. The unit started")
+        self.refused("cutover-blockers-apply", code=1, contains="exited 7. The unit started")
         self.h.mod.BLOCKERS_DEADLINE_SEC = 1
         self.mode(run="hang")
         self.refused(
             "cutover-blockers-apply",
+            code=1,
             contains="did not finish within 1 seconds; it was stopped. The unit",
         )
         self.h.mod.BLOCKERS_DEADLINE_SEC = 630
@@ -880,7 +907,7 @@ class Blockers(unittest.TestCase):
             (frame("result", b"x") + b"?", "did not put a frame header"),
         ):
             self.raw(data)
-            err = self.refused("cutover-blockers-apply", contains=contains)
+            err = self.refused("cutover-blockers-apply", code=1, contains=contains)
             self.assertIn("MAY have been applied", err)
             self.assertTrue(self.request.exists(), contains)
         self.assertEqual(self.exported(), [REQUEST])

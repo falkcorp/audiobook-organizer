@@ -755,12 +755,103 @@ class ApplyScript(BlockersBase):
         self.assertIn("cutover-blockers-list.sh", p.stderr)
         self.assertEqual(REQUEST in self.exported(), True, "a failed apply keeps the request")
 
-    def test_a_request_the_helper_refuses_stays_and_runs_no_command(self) -> None:
+    def test_a_request_the_installed_helper_would_refuse_is_never_placed(self) -> None:
         self.host()
-        p = self.run_script(str(self.request({"action": "explode", "key": ROBIN})))
-        self.assertNotEqual(p.returncode, 0, text(p))
+        bad = {
+            "unknown action": {"action": "explode", "key": ROBIN},
+            "uppercase key": {"action": "delete", "key": ROBIN.upper() + "A"},
+            "fix without a value": {"action": "fix", "key": ROBIN},
+            "unknown field": {"action": "delete", "key": ROBIN, "why": "x"},
+        }
+        for label, doc in bad.items():
+            for flags in ((), ("--dry-run",)):
+                p = self.run_script(*flags, str(self.request(doc)))
+                self.assertNotEqual(p.returncode, 0, f"{label} {flags}\n{text(p)}")
+                self.assertIn("not a request the installed helper accepts", p.stderr, label)
+                self.assertEqual(self.exported(), [], label)
+                self.assertEqual(self.box.sudo_calls(), [], label)
         self.assertEqual(self.app_calls(), [])
-        self.assertIn(REQUEST, self.exported())
+
+    def test_a_helper_refusal_before_it_started_takes_back_the_request_this_run_placed(self) -> None:
+        host = self.host()
+        host.transient_state.write_text("active\n")  # the helper's own view: not inactive
+        req = self.request()
+        p = self.run_script(str(req))
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("NOT RUN", p.stderr)
+        self.assertIn("the request this run placed was removed", p.stderr)
+        self.assertNotIn("MAY have been applied", p.stderr)
+        self.assertEqual(self.exported(), [], "nothing is left to get stuck")
+        self.assertEqual(self.app_calls(), [])
+        self.assertTrue(req.exists(), "the owner's own file is left alone")
+        # and a corrected run just works
+        host.transient_state.unlink()
+        p = self.run_script(str(req))
+        self.assertEqual(p.returncode, 0, text(p))
+
+    def test_a_request_that_was_waiting_before_the_run_is_left_after_a_not_run(self) -> None:
+        host = self.host()
+        host.transient_state.write_text("active\n")
+        (host.export / REQUEST).write_text(json.dumps({"action": "delete", "key": ROBIN}))
+        (host.export / REQUEST).chmod(0o600)
+        p = self.run_script()
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("NOT RUN", p.stderr)
+        self.assertIn("was there before this run, so it was left", p.stderr)
+        self.assertEqual(self.exported(), [REQUEST])
+
+    def test_a_not_run_needs_both_the_exit_status_and_the_line(self) -> None:
+        self.host()
+        req = self.request()
+        for label, body in (
+            ("status 4 without the line", "exit 4"),
+            ("the line with status 1", "echo NOT-RUN; exit 1"),
+            ("the line with status 0", "echo NOT-RUN"),
+        ):
+            self.fake_stub("cutover-blockers-apply", body)
+            p = self.run_script(str(req))
+            self.assertNotEqual(p.returncode, 0, f"{label}\n{text(p)}")
+            self.assertNotIn("NOT RUN", p.stderr, label)
+            self.assertEqual(self.exported(), [REQUEST], f"{label}: the request stays")
+            (self.fh.export / REQUEST).unlink()
+
+    def test_leftovers_of_an_interrupted_placement_are_cleared_and_never_block_a_run(self) -> None:
+        host = self.host()
+        req = self.request()
+        # An interrupted `ln` then `rm`: the fixed name AND the temp name are one
+        # file, which the helper refuses as hard-linked.
+        (host.export / REQUEST).write_bytes(req.read_bytes())
+        (host.export / REQUEST).chmod(0o600)
+        os.link(host.export / REQUEST, host.export / ".request.4242")
+        (host.export / ".request.7").write_text("x")
+        p = self.run_script("--dry-run", str(req))
+        self.assertEqual(p.returncode, 0, text(p))
+        self.assertIn("a real run would remove these leftovers", p.stdout)
+        self.assertEqual(self.exported(), sorted([REQUEST, ".request.4242", ".request.7"]))
+        p = self.run_script(str(req))
+        self.assertEqual(p.returncode, 0, text(p))
+        self.assertIn("removing leftovers of an interrupted run", p.stdout)
+        self.assertEqual(self.exported(), [])
+        self.assertEqual(len(self.app_calls()), 1)
+
+    def test_the_owners_copy_is_deleted_after_a_success_only_when_asked(self) -> None:
+        self.host()
+        req = self.request()
+        p = self.run_script(str(req))
+        self.assertEqual(p.returncode, 0, text(p))
+        self.assertTrue(req.exists(), "no terminal and no flag: left")
+        self.assertIn("--delete-request", p.stdout)
+        p = self.run_script("--delete-request", str(req))
+        self.assertEqual(p.returncode, 0, text(p))
+        self.assertFalse(req.exists())
+        self.assertIn(f"deleted {req}", p.stdout)
+
+    def test_the_owners_copy_is_kept_after_a_failure_even_when_asked(self) -> None:
+        self.host(blockers_exit=3)
+        req = self.request()
+        p = self.run_script("--delete-request", str(req))
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertTrue(req.exists())
 
     def test_success_without_the_removal_line_is_a_failure(self) -> None:
         host = self.host()

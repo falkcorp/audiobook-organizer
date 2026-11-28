@@ -35,12 +35,16 @@ arguments), copies the result file back, checks it, deletes the remote copy and
 prints it. The helper deletes the request itself after a successful apply. A
 failed apply cannot say nothing changed: the request stays on the host, the
 message says so, and the result file (when one was written) is still fetched.
+The exception is a refusal before the helper started anything: it prints one
+`NOT-RUN` line and exits 4, nothing ran and nothing changed, and this recipe
+removes the request it placed (only if the file there is still the one it
+placed, by inode) so a corrected request can be sent.
 
 Names the host prints are held to a fixed grammar before they reach scp or
 `rm`; host text is printed with control characters removed. Exit status: 0 done;
 1 refused or failed. Standard library only. Tests:
-scripts/tests/test_cutover_blockers_offhost.py and CutoverBlockersTargets in
-scripts/tests/test_make_rollback.py.
+scripts/tests/test_cutover_blockers_offhost.py (its Targets class runs the
+recipes against the FakeHost of scripts/tests/test_make_rollback.py).
 """
 
 from __future__ import annotations
@@ -209,10 +213,12 @@ def pull(guard, host: str, export_dir: str, dest: Path, files: dict) -> tuple[in
     return 0, ""
 
 
-def upload_request(guard, host: str, export_dir: str, path: Path, data: bytes) -> str:
+def upload_request(
+    guard, host: str, export_dir: str, path: Path, data: bytes
+) -> tuple[str, str]:
     """Put the request on the host under the fixed name, mode 0600, and check it
-    there. "" on success, else why. An existing remote request is never
-    replaced."""
+    there. ("", inode of the placed file) on success, else (why, ""). An
+    existing remote request is never replaced."""
     remote = f"{export_dir}/{REQUEST_NAME}"
     q = shlex.quote(remote)
     r = guard.run_remote(host, f"test -e {q} -o -L {q} && echo PRESENT || echo ABSENT", timeout=60)
@@ -220,13 +226,13 @@ def upload_request(guard, host: str, export_dir: str, path: Path, data: bytes) -
     if r.rc != 0 or state not in ("PRESENT", "ABSENT"):
         return (
             f"cannot tell whether {remote} exists on {host} (ssh exit {r.rc}); nothing was copied"
-        )
+        ), ""
     if state == "PRESENT":
         return (
             f"{host} already has a request at {remote}: an earlier apply may have failed, or "
             "another is waiting. Nothing was copied or run. Look at it, then remove it with "
             f"`ssh {host} {shlex.quote('rm -f -- ' + remote)}` and run this target again"
-        )
+        ), ""
     p = subprocess.run(  # noqa: S603 (argv, no shell; the remote path is built from export_dir)
         ["scp", *SCP_OPTS, "--", str(path), f"{host}:{remote}"],
         check=False,
@@ -234,15 +240,18 @@ def upload_request(guard, host: str, export_dir: str, path: Path, data: bytes) -
     )
     cleanup = f"remove it with `ssh {host} {shlex.quote('rm -f -- ' + remote)}`"
     if p.returncode != 0:
-        return f"scp of the request failed (exit {p.returncode}); if a partial file is there, {cleanup}"
+        return (
+            f"scp of the request failed (exit {p.returncode}); if a partial file is there, {cleanup}",
+            "",
+        )
     sha = hashlib.sha256(data).hexdigest()
-    cmd = f"chmod -- 600 {q} && stat -c '%a %s %u' -- {q} && sha256sum -- {q}"
+    cmd = f"chmod -- 600 {q} && stat -c '%a %s %u %i' -- {q} && sha256sum -- {q}"
     r = guard.run_remote(host, cmd, timeout=60)
     lines = guard.clean(r.stdout).strip().splitlines()
     ok = (
         r.rc == 0
         and len(lines) == 2
-        and re.fullmatch(r"600 [0-9]+ [0-9]+", lines[0]) is not None
+        and re.fullmatch(r"600 [0-9]+ [0-9]+ [0-9]+", lines[0]) is not None
         and int(lines[0].split()[1]) == len(data)
         and lines[1].split()[0] == sha
     )
@@ -250,8 +259,27 @@ def upload_request(guard, host: str, export_dir: str, path: Path, data: bytes) -
         return (
             f"the request on {host} is not the file that was sent (mode, size or sha256 differ; "
             f"ssh exit {r.rc}). Nothing was run. {cleanup}"
-        )
-    return ""
+        ), ""
+    return "", lines[0].split()[3]
+
+
+def take_back_request(guard, host: str, export_dir: str, inode: str) -> str:
+    """Remove the request this run placed, but only if the file at the fixed
+    name is still that file (same inode, not a symlink). Says what happened."""
+    remote = f"{export_dir}/{REQUEST_NAME}"
+    q = shlex.quote(remote)
+    cmd = (
+        f'[ ! -L {q} ] && [ "$(stat -c %i -- {q})" = {int(inode)} ] && rm -f -- {q} '
+        "&& echo REMOVED || echo KEPT"
+    )
+    r = guard.run_remote(host, cmd, timeout=60)
+    if r.rc == 0 and guard.clean(r.stdout).strip() == "REMOVED":
+        return f"the request this run sent was removed from {host}"
+    return (
+        f"the request at {remote} on {host} was not removed (it is not the file this run sent, "
+        f"or ssh failed); look at it and remove it with `ssh {host} "
+        f"{shlex.quote('rm -f -- ' + remote)}` before the next run"
+    )
 
 
 def main() -> int:
@@ -289,8 +317,9 @@ def main() -> int:
     except OSError as e:
         return fail(f"cannot make the local directory ({e.strerror}); nothing was copied")
     key, want, optional = WHAT[what]
+    placed = ""
     if request is not None:
-        why = upload_request(guard, o.host, o.export_dir, *request)
+        why, placed = upload_request(guard, o.host, o.export_dir, *request)
         if why:
             return fail(why)
     r = guard.run_remote(o.host, guard.commands(o)[key], timeout=OP_TIMEOUT)
@@ -300,6 +329,15 @@ def main() -> int:
             file=sys.stderr,
         )
     stdout = guard.clean(r.stdout)
+    if (
+        what == "apply"
+        and r.rc == load_helper().BLOCKERS_NOT_RUN_EXIT
+        and stdout.strip() == load_helper().BLOCKERS_NOT_RUN
+    ):
+        return fail(
+            "NOT RUN: the helper refused before it started (its message is above). Nothing "
+            f"changed; {take_back_request(guard, o.host, o.export_dir, placed)}"
+        )
     files = parse(stdout, want, optional, removed=what == "apply" and r.rc == 0)
     if r.rc != 0 and isinstance(files, str):
         files = {}

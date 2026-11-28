@@ -24,18 +24,32 @@
 # moves the result to ~/aorg-owner/blockers/<UTC stamp>/ (mode 0700), checks it,
 # and prints it.
 #
-# `delete` removes the row and the rows that go with it. It cannot be undone
-# except by `make rollback-restore`.
+# `delete` removes the row and the rows that go with it. There is no tracked undo
+# for it before Step 4. The restore point is the web-app backup taken before
+# Step 0 (copied off the host): `make rollback-restore ROLLBACK_ARCHIVE=<that
+# archive>` restores the data, but it also installs the previous binary
+# (Known gap 3 in the runbook).
 #
-# The service must ALREADY be stopped. This script never stops or starts it, and
-# it refuses before the sudo call if the unit is not inactive.
+# The service must ALREADY be stopped (bash ~/aorg-owner/service-stop.sh). This
+# script never stops or starts it, and it refuses before the sudo call if the
+# unit is not inactive.
+#
+# The request is checked with the installed helper's own parser before it is
+# placed (also under --dry-run). If the helper refuses it before anything ran
+# (it prints NOT-RUN), nothing changed: this script removes the request it placed
+# and you can run it again with a corrected file. It also clears `.request.*`
+# leftovers of an interrupted earlier run.
 #
 # Safe to run again: a request that is already in place with the same contents is
-# reused; a different one is never overwritten. After a FAILED apply the request
-# stays where it is and the change may or may not have happened: run
-# cutover-blockers-list.sh to see what is left before trying again.
-#   --dry-run   do everything except putting the request in place and the sudo
-#               call.
+# reused; a different one is never overwritten. After a FAILED apply (the helper
+# started) the request stays where it is and the change may or may not have
+# happened: run cutover-blockers-list.sh to see what is left before trying again.
+#   --dry-run         do everything except putting the request in place and the
+#                     sudo call.
+#   --delete-request  after a success, delete your copy of REQUEST_FILE without
+#                     asking (it holds the value). Without the flag the script
+#                     asks when it is run from a terminal, and otherwise leaves
+#                     the file.
 #
 # Exits non-zero on any failure.
 
@@ -49,12 +63,14 @@ REQUEST_NAME=aorg-cutover-blockers-request.json
 LIMIT=$((16 * 1024 * 1024))
 
 DRY=0
+DELETE_REQ=0
 REQ=
 for a in "$@"; do
   case "$a" in
     --dry-run) DRY=1 ;;
-    -*) echo "usage: $0 [--dry-run] [REQUEST_FILE]" >&2; exit 2 ;;
-    *) [ -z "$REQ" ] || { echo "usage: $0 [--dry-run] [REQUEST_FILE]" >&2; exit 2; }; REQ=$a ;;
+    --delete-request) DELETE_REQ=1 ;;
+    -*) echo "usage: $0 [--dry-run] [--delete-request] [REQUEST_FILE]" >&2; exit 2 ;;
+    *) [ -z "$REQ" ] || { echo "usage: $0 [--dry-run] [--delete-request] [REQUEST_FILE]" >&2; exit 2; }; REQ=$a ;;
   esac
 done
 
@@ -69,6 +85,23 @@ check_request() {
   [ "$(stat -c %a "$f")" = "600" ] || fail "$f must be mode 0600: it holds a value"
   size=$(stat -c %s "$f")
   { [ "$size" -ge 1 ] && [ "$size" -le "$LIMIT" ]; } || fail "$f is $size bytes; it must be 1 to $LIMIT"
+  # The installed helper's own parser: one fix or delete, a lowercase-hex key, a
+  # base64 value for a fix, no unknown field. It prints no value.
+  python3 -I - "$LIBDIR/rollback_helper.py" "$f" <<'PY' || fail "$f is not a request the installed helper accepts (its reason is above)"
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("rollback_helper_installed", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = mod
+spec.loader.exec_module(mod)
+try:
+    with open(sys.argv[2], "rb") as fh:
+        mod._blockers_parse_request(fh.read())
+except mod.RefusedError as e:
+    print(f"    {e}", file=sys.stderr)
+    sys.exit(1)
+PY
 }
 
 [ "$(id -u)" -ne 0 ] || fail "run this as yourself, not with sudo; the helper is the only thing that runs as root"
@@ -99,6 +132,18 @@ echo "    $UNIT is inactive"
 
 # 3. The request.
 say "3/5 the request"
+# Leftovers of an interrupted placement (a temp name that may still be a second
+# link to the request, which the helper refuses).
+STALE=$(find "$EXPORT_DIR" -maxdepth 1 -name '.request.*' -type f -user "$(id -u)" -print)
+if [ -n "$STALE" ]; then
+  if [ "$DRY" -eq 1 ]; then
+    echo "    a real run would remove these leftovers of an interrupted run:"; printf '      %s\n' "$STALE"
+  else
+    echo "    removing leftovers of an interrupted run:"; printf '      %s\n' "$STALE"
+    while IFS= read -r f; do rm -f -- "$f"; done <<<"$STALE"
+  fi
+fi
+PLACED_INO=
 if [ -n "$REQ" ]; then
   check_request "$REQ"
   WANT=$(sha_of "$REQ")
@@ -115,6 +160,7 @@ if [ -n "$REQ" ]; then
     ln -- "$TMP" "$IN_PLACE" || { rm -f -- "$TMP"; fail "could not place the request as $IN_PLACE"; }
     rm -f -- "$TMP"
     [ "$(stat -c %s "$IN_PLACE")" = "$(stat -c %s "$REQ")" ] && [ "$(sha_of "$IN_PLACE")" = "$WANT" ] || fail "the request in $EXPORT_DIR is not the file you gave. Nothing was run."
+    PLACED_INO=$(stat -c %i "$IN_PLACE")
     echo "    $REQ placed as $IN_PLACE"
   fi
 else
@@ -133,7 +179,7 @@ say "4/5 applying (the helper runs as root)"
 RC=0
 OUT=$(sudo -n "$LIBDIR/$STUB") || RC=$?
 
-RESULT_NAME=; RESULT_SIZE=; RESULT_SHA=; REMOVED=0
+RESULT_NAME=; RESULT_SIZE=; RESULT_SHA=; REMOVED=0; NOT_RUN=0
 re='^EXPORTED ([A-Za-z0-9._-]+) ([0-9]{1,8}) ([0-9a-f]{64})$'
 res_re='^aorg-cutover-blockers-result-[0-9]{8}T[0-9]{6}Z\.txt$'
 while IFS= read -r line; do
@@ -147,10 +193,27 @@ while IFS= read -r line; do
     fi
   elif [ "$line" = "REQUEST-REMOVED $REQUEST_NAME" ] && [ "$REMOVED" -eq 0 ]; then
     REMOVED=1
+  elif [ "$line" = "NOT-RUN" ] && [ "$NOT_RUN" -eq 0 ]; then
+    NOT_RUN=1
   else
     echo "    (the helper printed a line this script does not recognise; ignored)" >&2
   fi
 done <<<"$OUT"
+
+# The helper refused before it started anything: nothing ran, nothing changed.
+# Take back the request this run placed (the same file, by inode), so a corrected
+# request can be placed next time.
+if [ "$RC" -eq 4 ] && [ "$NOT_RUN" -eq 1 ]; then
+  echo >&2
+  if [ -n "$PLACED_INO" ] && [ -f "$IN_PLACE" ] && [ ! -L "$IN_PLACE" ] \
+    && [ "$(stat -c %i "$IN_PLACE")" = "$PLACED_INO" ]; then
+    rm -f -- "$IN_PLACE"
+    echo "NOT RUN: the helper refused before it started (its message is above). Nothing changed, and the request this run placed was removed." >&2
+  else
+    echo "NOT RUN: the helper refused before it started (its message is above). Nothing changed. The request in $EXPORT_DIR was there before this run, so it was left." >&2
+  fi
+  exit 1
+fi
 
 # 5. The result.
 say "5/5 the result"
@@ -181,4 +244,17 @@ fi
 [ -n "$RESULT_NAME" ] || fail "the helper succeeded but reported no result file this script accepts; look in $EXPORT_DIR"
 [ "$REMOVED" -eq 1 ] || fail "the helper succeeded but did not report removing the request; look in $EXPORT_DIR"
 [ ! -e "$IN_PLACE" ] || fail "the helper reported removing the request but $IN_PLACE is still there"
-say "done: applied; the request was removed from $EXPORT_DIR. Delete your own copy of the request file (it holds the value), then run cutover-blockers-list.sh to see what is left."
+echo "    the request was removed from $EXPORT_DIR"
+if [ -n "$REQ" ] && [ -f "$REQ" ] && [ ! -L "$REQ" ]; then
+  ANS=n
+  if [ "$DELETE_REQ" -eq 1 ]; then
+    ANS=y
+  elif [ -t 0 ]; then
+    read -r -p "    Delete your copy of the request, $REQ? It holds the value. [y/N] " ANS || ANS=n
+  fi
+  case "$ANS" in
+    y|Y|yes|YES) rm -f -- "$REQ"; echo "    deleted $REQ" ;;
+    *) echo "    left in place: $REQ (it holds the value; run this script again with --delete-request to remove it)" ;;
+  esac
+fi
+say "done: applied. Run cutover-blockers-list.sh to see what is left."
