@@ -231,8 +231,7 @@ func TestRefuseChildOverIdentityStore_FailsClosed(t *testing.T) {
 	if err := refuseChildOverIdentityStore(ctx, cutoverStateStore{err: boom}); !errors.Is(err, boom) {
 		t.Errorf("a failed read of the cutover state did not refuse with the read error: %v", err)
 	}
-	// A store with no way to answer (database.Store alone has no
-	// DataMigrationDone) is refused, not assumed to be unmigrated.
+	// No store to ask is refused, not assumed to be unmigrated.
 	if err := refuseChildOverIdentityStore(ctx, nil); err == nil {
 		t.Error("a store that cannot report its identity cutover was let through")
 	}
