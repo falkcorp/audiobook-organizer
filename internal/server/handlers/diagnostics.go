@@ -94,14 +94,6 @@ const DiagnosticsExportDefID = diagnostics.ExportOpID
 // allow it.
 type ExportDownloadCheck func(c *gin.Context, row *database.OperationV2Row, res diagnostics.ExportResult) (refusal string, err error)
 
-// ExportStartCheck decides, before an export is enqueued, whether this request
-// may start one at all (WithStartCheck). A non-empty refusal is answered 409
-// with that text and nothing is enqueued; "" lets the start proceed. It exists
-// for a request that could be queued but never completed: an export is built
-// for the account that started it, and a request that carries no account has
-// none to build it for.
-type ExportStartCheck func(c *gin.Context) (refusal string)
-
 // DiagnosticsAIOpParams is the param shape for DiagnosticsAIDefID.
 //
 // Deliberately exported and used verbatim by the server-side registration,
@@ -272,9 +264,6 @@ type DiagnosticsHandler struct {
 	// (WithDownloadCheck). With auth on, DownloadExport refuses every download
 	// while it is nil.
 	downloadCheck ExportDownloadCheck
-	// startCheck refuses a start before it is enqueued (WithStartCheck); nil
-	// refuses nothing.
-	startCheck ExportStartCheck
 	// access reads an operation's free text the way the operation routes serve
 	// it (WithOpAccess); nil withholds text that could name a user.
 	access *opaccess.Repairs
@@ -286,13 +275,6 @@ type DiagnosticsHandler struct {
 // compared with the export's.
 func (h *DiagnosticsHandler) WithDownloadCheck(check ExportDownloadCheck) *DiagnosticsHandler {
 	h.downloadCheck = check
-	return h
-}
-
-// WithStartCheck wires the check StartExport runs before it enqueues an
-// export. Unwired, every start that passed the route's permission is enqueued.
-func (h *DiagnosticsHandler) WithStartCheck(check ExportStartCheck) *DiagnosticsHandler {
-	h.startCheck = check
 	return h
 }
 
@@ -361,16 +343,6 @@ func (h *DiagnosticsHandler) StartExport(c *gin.Context) {
 		return
 	}
 
-	// Refuse here, not after the job is queued: a start that can only fail
-	// later would be answered 202 and then report a failure the caller cannot
-	// act on.
-	if h.startCheck != nil {
-		if refusal := h.startCheck(c); refusal != "" {
-			httputil.RespondWithConflict(c, refusal)
-			return
-		}
-	}
-
 	params := diagnosticsExportOpParams{
 		Category:    req.Category,
 		Description: req.Description,
@@ -384,9 +356,12 @@ func (h *DiagnosticsHandler) StartExport(c *gin.Context) {
 	// account may read (server.diagnosticsExportOptionsFor), re-read from the op
 	// row rather than taken from params, which a generic start can set.
 	opts := servermiddleware.ActorOptions(c)
+	// A start the definition refuses (no account to build the export for) is a
+	// 409 with its reason, made by the registry for every route that starts the
+	// export, not here.
 	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), DiagnosticsExportDefID, params, opts...)
 	if enqErr != nil {
-		httputil.InternalError(c, "failed to enqueue diagnostics export", enqErr)
+		servermiddleware.RespondEnqueueError(c, "failed to enqueue diagnostics export", enqErr)
 		return
 	}
 

@@ -210,7 +210,7 @@ func (h *Handler) StartRun(c *gin.Context) {
 	opts := servermiddleware.ActorOptions(c)
 	runID, err := h.d.Enqueuer.EnqueueOp(c.Request.Context(), defID, params, opts...)
 	if err != nil {
-		httputil.InternalError(c, "enqueue failed", err)
+		servermiddleware.RespondEnqueueError(c, "enqueue failed", err)
 		return
 	}
 	if runID == "" {

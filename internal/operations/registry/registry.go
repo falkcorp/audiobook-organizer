@@ -994,6 +994,25 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 		rawParams = json.RawMessage("{}")
 	}
 
+	// Apply options. Read first: the start precondition below judges the request
+	// by them, and the dedupe further down compares the request's actor with the
+	// active run's (DedupeSameActorOnly).
+	eopts := &EnqueueOptions{}
+	for _, opt := range opts {
+		opt(eopts)
+	}
+
+	// The definition's own start precondition (OperationDef.StartPrecondition).
+	// Before the batch and merge branches as well as the insert, so a refused
+	// start leaves nothing behind whichever of them it would have taken. Every
+	// route that starts an operation arrives here, so a refusal made here is
+	// made by all of them.
+	if def.StartPrecondition != nil {
+		if err := def.StartPrecondition(ctx, *eopts); err != nil {
+			return "", err
+		}
+	}
+
 	// --- M3 Batching: intercept before ConcurrencyKey dedupe ---
 	// For Batchable ops we bucket the subject and return early.
 	// Per-enqueue WithRequires options cannot be journaled and are therefore
@@ -1022,13 +1041,6 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 		if merged {
 			return mergedID, nil
 		}
-	}
-
-	// Apply options. Read before the dedupe below, which compares the request's
-	// actor with the active run's (DedupeSameActorOnly).
-	eopts := &EnqueueOptions{}
-	for _, opt := range opts {
-		opt(eopts)
 	}
 
 	// Admission: from the dedupe read of the active set below to the insert
