@@ -240,6 +240,7 @@ func tasksFlipOptions(imp module.Importers) *cutover.TasksFlipOptions {
 				_, err := database.ReconcileOpsV3ForCutover(ctx, lr)
 				return err
 			},
+			ViewOf:           importedKindView(headFixers),
 			ScanStandDownKey: scanStandDownKey,
 			// HEAD wrote the maintenance window's date as the local calendar day.
 			Location: time.Local,

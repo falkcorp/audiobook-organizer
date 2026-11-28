@@ -105,6 +105,8 @@ type lazyImporter struct {
 	runs map[tasks.RunID]int
 	// clocks counts the Clock calls per kind.
 	clocks map[tasks.Kind]int
+	// stamps counts the StampView calls per kind.
+	stamps map[tasks.Kind]int
 }
 
 func (l *lazyImporter) bind(ks storage.Keyspace) {
@@ -171,8 +173,41 @@ func (l *lazyImporter) Stamp(ctx context.Context, b *storage.Batch, s entity.Ref
 	return l.get().Stamp(ctx, b, s, k, at)
 }
 
+// StampView forwards tasks.ViewStamper to the native importer, and records the
+// kinds stamped (calls counted per kind, so a test can tell a stamp from none).
+func (l *lazyImporter) StampView(ctx context.Context, b *storage.Batch, k tasks.Kind, v tasks.KindView) error {
+	l.mu.Lock()
+	if l.stamps == nil {
+		l.stamps = map[tasks.Kind]int{}
+	}
+	l.stamps[k]++
+	l.mu.Unlock()
+	st, ok := l.get().(tasks.ViewStamper)
+	if !ok {
+		return errors.New("the native importer cannot stamp a view")
+	}
+	return st.StampView(ctx, b, k, v)
+}
+
+func (l *lazyImporter) stampCalls(k tasks.Kind) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.stamps[k]
+}
+
 func (l *lazyImporter) RenameKind(ctx context.Context, b *storage.Batch, from, to tasks.Kind, cursor string, limit int) (string, error) {
 	return l.get().RenameKind(ctx, b, from, to, cursor, limit)
+}
+
+// defaultViewOf stamps every kind unrestricted: the rule HEAD gave an operation
+// that is not a Repairs one. The cells that pin a restricted kind set their own.
+func defaultViewOf(tasks.Kind) (tasks.KindView, bool, error) { return tasks.KindView{}, true, nil }
+
+func (r *rig) viewOfOrDefault() m4.ViewOfFunc {
+	if r.viewOf != nil {
+		return r.viewOf
+	}
+	return defaultViewOf
 }
 
 // ---- the rig ----
@@ -204,6 +239,8 @@ type rig struct {
 	// scanHide, when set, drops the keys it reports from the legacy range's
 	// scans (a row another worker's commit took, as a scan would see it).
 	scanHide func(key string) bool
+	// viewOf is Config.ViewOf; nil is defaultViewOf.
+	viewOf m4.ViewOfFunc
 	// zone is the window clock's zone; the default is gotham.
 	zone *time.Location
 	// reconcileFn, when set, is what HEAD's reconcile does in the rig.
@@ -358,6 +395,7 @@ func (r *rig) config() m4.Config {
 			}
 			return *lr
 		},
+		ViewOf:           r.viewOfOrDefault(),
 		ScanStandDownKey: scanKey,
 		StampAt:          stampAt,
 		Location:         cmp.Or(r.zone, gotham),

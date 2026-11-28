@@ -77,6 +77,11 @@ type Config struct {
 	// stamp has no source time; a fixed instant (the migration's, chosen once by
 	// the caller) keeps a resumed boot's stamps equal to an uninterrupted one's.
 	StampAt time.Time
+	// ViewOf is HEAD's read gate for the runs of a kind (ViewOfFunc). Required: a
+	// kind the build has no definition for is hidden from everyone unless its
+	// snapshot says who may read it, and the step writes that snapshot for each
+	// kind it imports.
+	ViewOf ViewOfFunc
 	// Logger receives one line per quarantined run (its ID and a fixed class,
 	// never a value). nil discards.
 	Logger *slog.Logger
@@ -91,6 +96,7 @@ type Migration struct {
 	recon  func(ctx context.Context) error
 	logger *slog.Logger
 
+	views   *viewStamper
 	scanKey tasks.Key
 	loc     *time.Location
 	stampAt time.Time
@@ -144,7 +150,14 @@ func New(cfg Config, id string, raisesLevel int, after []storage.StepRef) (datam
 	case len(after) == 0:
 		return datamigrate.DataMigration{}, errors.New("m4: after is books' level step")
 	}
-	m := &Migration{imp: cfg.Importer, legacy: cfg.Legacy, recon: cfg.Reconcile, logger: cfg.Logger, scanKey: cfg.ScanStandDownKey, loc: cfg.Location, stampAt: cfg.StampAt.UTC()}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.New(slog.DiscardHandler)
+	}
+	views, err := newViewStamper(cfg.Importer, cfg.ViewOf, cfg.Logger)
+	if err != nil {
+		return datamigrate.DataMigration{}, err
+	}
+	m := &Migration{views: views, imp: cfg.Importer, legacy: cfg.Legacy, recon: cfg.Reconcile, logger: cfg.Logger, scanKey: cfg.ScanStandDownKey, loc: cfg.Location, stampAt: cfg.StampAt.UTC()}
 	if m.logger == nil {
 		m.logger = slog.New(slog.DiscardHandler)
 	}
@@ -339,6 +352,9 @@ func (m *Migration) stepRun(ctx context.Context, kv storage.KV, w *datamigrate.S
 	}
 	if err := m.imp.RunData(ctx, b, c.rec.ID, c.data); err != nil {
 		return fmt.Errorf("m4: import the data of run %q: %w", id, err)
+	}
+	if err := m.views.stage(ctx, b, w, c.rec.Kind); err != nil {
+		return err
 	}
 	if c.superseded > 0 {
 		// Counted as an outcome of its own, once per outcome carried, so the report

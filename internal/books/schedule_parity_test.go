@@ -1595,6 +1595,10 @@ func kindDeclarations(t *testing.T, root string, dirs ...string) map[tasks.Kind]
 // the store opens (M4's Config takes the importer before).
 type lateImporter struct{ tasks.Importer }
 
+func (l *lateImporter) StampView(ctx context.Context, b *storage.Batch, k tasks.Kind, v tasks.KindView) error {
+	return l.Importer.(tasks.ViewStamper).StampView(ctx, b, k, v)
+}
+
 // m4Import cuts a books store holding HEAD's settings rows over with M4 alone
 // (books' storage spec raised to its cutover level behind its level step, M4's
 // families retired, the kernel's data-migration runner and preflight, the way
@@ -1679,6 +1683,7 @@ func m4Import(t *testing.T, settings map[string]string, zone *time.Location) map
 		Importer: imp, Legacy: func() storage.Reader { return legacy },
 		ScanStandDownKey: "books.library.scan", StampAt: time.Date(2030, 3, 1, 0, 0, 0, 0, time.UTC), Location: zone,
 		Reconcile: func(context.Context) error { return nil }, Logger: discard,
+		ViewOf: func(tasks.Kind) (tasks.KindView, bool, error) { return tasks.KindView{}, true, nil },
 	}, cutover.TasksCutoverID, cutover.BooksCutoverLevel, []storage.StepRef{cutover.BooksLevelStepRef(level)})
 	if err != nil {
 		t.Fatal(err)

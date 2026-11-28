@@ -25,6 +25,11 @@ import (
 // nopTaskImporter and nopLogImporter satisfy the two configs' non-nil checks;
 // no test here runs a step, so no method is ever called.
 type nopTaskImporter struct{ tasks.Importer }
+
+func (nopTaskImporter) StampView(context.Context, *storage.Batch, tasks.Kind, tasks.KindView) error {
+	return nil
+}
+
 type nopLogImporter struct{ log.Importer }
 
 type nopRuns struct{}
@@ -40,6 +45,7 @@ func tasksOpts() *TasksFlipOptions {
 			Importer:         nopTaskImporter{},
 			Legacy:           func() storage.Reader { return nil },
 			Reconcile:        func(context.Context) error { return nil },
+			ViewOf:           func(tasks.Kind) (tasks.KindView, bool, error) { return tasks.KindView{}, false, nil },
 			ScanStandDownKey: "books.library.scan",
 			Location:         time.UTC,
 			StampAt:          time.Date(2026, 11, 22, 0, 0, 0, 0, time.UTC),
