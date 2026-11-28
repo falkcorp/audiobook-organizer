@@ -42,12 +42,6 @@ type enqResult struct {
 	err error
 }
 
-// operatorShaped is rbac.OperatorRequirement's seven core scopes (core/rbac
-// operator.go, on the F6-03 and F7-09 branches, not yet on this one): what the
-// settings.manage atom grants, with core:system.manage (AuthRequired) among them.
-var operatorShaped = rbac.AllOf("core:settings.manage", "core:tasks.manage", "core:system.view", "core:system.manage",
-	"core:library.manage", "core:library.browse", "core:integrations.manage")
-
 const sysStartReason = "a start the executor began on the system's behalf"
 
 func newSystemStartRig(t *testing.T, listed bool) *systemStartRig {
@@ -89,7 +83,7 @@ func newSystemStartRig(t *testing.T, listed bool) *systemStartRig {
 		taskDef("gotham.child", okBody, holdable),
 		taskDef("arkham.relocate", okBody, flagged),
 		taskDef("gotham.operator", okBody, func(c *tasks.Common) {
-			c.Perms.Start = operatorShaped
+			c.Perms.Start = rbac.OperatorRequirement()
 			c.Perms.SystemStart = sysStartReason
 		}, scheduled),
 	}, func(o *Options) {
