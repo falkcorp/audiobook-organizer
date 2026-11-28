@@ -255,12 +255,19 @@ func (h *Registered) probeOnce(p *Principal, method, path string, body any, ri *
 // coreLogoutRoute is core's logout, which ends the caller's own session.
 const coreLogoutRoute = "/api/core/v1/auth/logout"
 
+// coreLogoutRefuses are the session principals core's logout refuses: the
+// fp-worker session holds only the worker grants, not core:self. Every other
+// session principal must be signed out by it.
+var coreLogoutRefuses = []string{"session:fp-worker"}
+
 // coreLogout is the session killer after HEAD's logout route was probed as p, a
 // session principal. HEAD's route answers 410 under core identity and changes no
 // state, so p's session must still answer its canary as before; core's logout
-// then ends it, and the canary must answer 401 (a principal core's logout
-// refuses is left as it is). Either way it fails is recorded in
-// pass.logoutLeftSession. The caller signs p in again.
+// then ends it, and the canary must answer 401. A principal of coreLogoutRefuses
+// must be refused (401 or 403) and is left as it is; any other principal core's
+// logout refuses is a failure, so a core logout that refused everyone fails here.
+// Either way it fails is recorded in pass.logoutLeftSession. The caller signs p
+// in again.
 func (h *Registered) coreLogout(p *Principal, canaryBefore int, pass *oraclePass) {
 	h.t.Helper()
 	if got := h.canaryFor(p); got != canaryBefore {
@@ -268,10 +275,11 @@ func (h *Registered) coreLogout(p *Principal, canaryBefore int, pass *oraclePass
 			fmt.Sprintf("%s: HEAD's logout route changed the session: canary %d before, %d after", p.Name, canaryBefore, got))
 	}
 	res, err := h.probeOnce(p, http.MethodPost, coreLogoutRoute, nil, nil)
-	if err == nil && (res.Status == http.StatusUnauthorized || res.Status == http.StatusForbidden) {
-		// Core's logout refuses this principal (the fp-worker sessions hold
-		// only the worker grants), so nothing ends its session here; the
-		// caller signs it in again either way.
+	if slices.Contains(coreLogoutRefuses, p.Name) {
+		if err != nil || (res.Status != http.StatusUnauthorized && res.Status != http.StatusForbidden) {
+			pass.logoutLeftSession = append(pass.logoutLeftSession,
+				fmt.Sprintf("%s: core's logout answered %d (%v), want the refusal of a principal without core:self", p.Name, res.Status, err))
+		}
 		return
 	}
 	if err != nil || res.Status >= 300 {
