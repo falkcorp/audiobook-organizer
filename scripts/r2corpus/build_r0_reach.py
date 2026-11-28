@@ -10,7 +10,7 @@ R0 used to mean the v0.223.0 release asset. Since 2026-11-22 the reach baseline
 ``r0config/r0_reach_commit.txt``, built with the release asset's recipe, so the
 baseline holds whatever main had merged by then and a flip difference is measured
 against main, not against a 16-day-old release. The corpus writer, its manifest
-and ``TestR0OpensR1Store`` keep the release (``ci/r0_release.txt``): only the
+and ``TestR0RefusesPostFlipStore`` keep the release (``ci/r0_release.txt``): only the
 reach recording moves.
 
 The recipe is the release asset's, read off v0.223.0's build info (``go version
