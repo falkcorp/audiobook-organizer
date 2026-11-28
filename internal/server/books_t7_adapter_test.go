@@ -9,6 +9,7 @@ import (
 	"errors"
 	"go/types"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -85,6 +86,29 @@ func (c booksT7Callable) call() (res []reflect.Value, panicked any) {
 	return c.fn.Call(args), nil
 }
 
+// booksT7CallableBuilt reports whether the method c is in the built table, on
+// its own view.
+func booksT7CallableBuilt(c booksT7Callable) bool {
+	side := strings.TrimPrefix(c.owner, "booksT7")
+	return booksT7Built[c.name] || booksT7Built[side+"."+c.name]
+}
+
+// booksT7OnlyBuilt replaces the built table with exactly methods for the rest of
+// the test, so a cell about one method does not depend on what the groups have
+// built since.
+func booksT7OnlyBuilt(t *testing.T, methods ...string) {
+	t.Helper()
+	prev := maps.Clone(booksT7Built)
+	clear(booksT7Built)
+	for _, m := range methods {
+		booksT7Built[m] = true
+	}
+	t.Cleanup(func() {
+		clear(booksT7Built)
+		maps.Copy(booksT7Built, prev)
+	})
+}
+
 // booksT7Refusal asserts what a stub does on a zero Server, and never panics:
 // a method with an error result returns an *ErrKindNotBuilt that names the
 // method and the kinds that reach it, with every other result zero; a method
@@ -92,6 +116,12 @@ func (c booksT7Callable) call() (res []reflect.Value, panicked any) {
 func booksT7Refusal(t *testing.T, c booksT7Callable) {
 	t.Helper()
 	id := c.owner + "." + c.name
+	if booksT7CallableBuilt(c) {
+		// A built method is not a stub: it has a body that is allowed to refuse
+		// with a plain error on a zero Server. TestBooksT7Stubs_AgreeWithBuilt is
+		// the cell that holds the built table and the behaviour together.
+		t.Skipf("%s is built", id)
+	}
 	before := booksT7StubEntries.Load()
 	res, panicked := c.call()
 	require.Nil(t, panicked, "%s must never panic", id)
@@ -186,6 +216,10 @@ func booksT7KindsOf(defs []tasks.Definition) []tasks.Kind {
 // kind without checking its row ("builds a kind that reaches an unbuilt
 // method"); call a method while deciding ("enters no stub body").
 func TestBooksT7Kinds_DoorCoversT7Kinds(t *testing.T) {
+	// Nothing built: the door must report every kind, and a zero Server is then
+	// enough. Once methods are built a kind that reaches only built methods is
+	// refused for its unset field (TestBooksT7Kinds_BuildsOnBuiltMethodsAndFields).
+	booksT7OnlyBuilt(t)
 	s := &Server{}
 	deps := s.booksT7Deps("books.library.scan")
 	want := booksT7KindsOf(s.t7Kinds(deps, nil))
@@ -230,15 +264,7 @@ func TestBooksT7Kinds_BuildsOnBuiltMethodsAndFields(t *testing.T) {
 	const sizeRefresh = tasks.Kind("books.library.size-refresh")
 	// every kind that reaches GetAllImportPaths: only size-refresh reaches nothing else.
 	require.Equal(t, []string{"GetAllImportPaths"}, booksT7Reaches[sizeRefresh])
-	prev, had := booksT7Built["GetAllImportPaths"]
-	booksT7Built["GetAllImportPaths"] = true
-	t.Cleanup(func() {
-		if had {
-			booksT7Built["GetAllImportPaths"] = prev
-		} else {
-			delete(booksT7Built, "GetAllImportPaths")
-		}
-	})
+	booksT7OnlyBuilt(t, "GetAllImportPaths")
 
 	_, err := (&Server{}).BooksT7Kinds("books.library.scan", nil)
 	require.ErrorContains(t, err, "needs Server.store", "a nil backing is refused by field name")

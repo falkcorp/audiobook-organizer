@@ -21,7 +21,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
-	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // bulkWriteBackOpParams is the JSON params for the library.bulk-write-back op.
@@ -220,7 +219,15 @@ func (s *Server) bulkWriteBackNative(deps t7Deps, sched func(tasks.Kind) *tasks.
 	kind := t7KindFor(bulkWriteBackOpID)
 	c := t7Common(s.bulkWriteBackDef(), sched)
 	c.Resume = t7Resume(opsregistry.ResumeRestart, true)
-	c.Effects = t7Writes(ops.ResBooks, ops.ResBookFiles, ops.ResFiles)
+	// The write set is the whole row of WriteBackBooks, which is one gated call:
+	// the tag and cover write (files, books), the rename-only apply and the
+	// library copy it can create (book_files, authors, metadata_cache, indexes,
+	// field_states, embeddings, user_state, sync_identity, external_ids,
+	// operations). It was books, book_files and files, which the first
+	// ModifyBook of the run would have been refused outside (its row stamps
+	// metadata_cache and indexes too). booksT7WriteBackBooksStoreWrites lists the
+	// store writes with where each is made.
+	c.Effects = t7Writes(booksT7WriteBackBooksRow()...)
 	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: c,
 		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {

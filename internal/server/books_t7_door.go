@@ -78,7 +78,9 @@ func booksT7KindsReaching(method string) []tasks.Kind {
 // booksT7Built is the methods a group has built, keyed by method name; "Ready"
 // is the one name both views have, so its two views are "Store.Ready" and
 // "Writer.Ready". A group sets a method here in the commit that gives it a body,
-// and a cell fails when this table and the method's behaviour disagree.
+// from an init in its own file (books_t7_adapter.go for the shared twelve,
+// books_t7_library.go, books_t7_catalog.go), never in this literal; a cell fails
+// when this table and the method's behaviour disagree.
 var booksT7Built = map[string]bool{}
 
 // booksT7MethodBuilt reports whether a row entry is built.

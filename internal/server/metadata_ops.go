@@ -1319,20 +1319,14 @@ func (s *Server) runBulkWriteBack(
 	var wg sync.WaitGroup
 	var written, failed, skipped atomic.Int64
 
-	// ckptMu guards ONLY SaveCheckpoint, which writes a shared state blob to the
-	// store. It deliberately does NOT wrap progress.Log / progress.UpdateProgress:
-	// the reporter serializes those internally on its own progressMu, so the mutex
-	// that used to wrap them here was redundant and was serializing every worker
-	// through the reporter for no benefit.
-	//
-	// Honesty note on the checkpoint value: with N workers finishing out of order,
-	// the completion COUNT is no longer a valid resume INDEX — a resume from that
-	// index can skip a straggler and re-do a book that already finished. Write-back
-	// is idempotent (it rewrites the same tags from the same DB row), so re-doing is
-	// harmless; skipping is the real cost, and it is bounded by the in-flight window
-	// (at most `workers` books). Accepted deliberately: without a checkpoint at all,
-	// a restart replays the entire library from zero.
-	var ckptMu sync.Mutex
+	// There is no v1 checkpoint here. The loop used to SaveCheckpoint an opstate:
+	// row every ten books and ClearState it at the end, keyed on the opID the
+	// caller minted for this attempt, and nothing ever read either back: the
+	// resume point is the caller's own done-set (bulkWriteBackCore's
+	// Checkpoint, which survives a restart), and no reader of opstate: knows the
+	// "bulk_write_back" type. The opstate: family is retired under the tasks flip,
+	// so a native run's write there is refused; the dead write is removed rather
+	// than carried (F5-18 t7).
 
 	// canceled is set by any worker (or the feeder) that observes cancellation so
 	// the "canceled" log line is emitted exactly once rather than once per worker.
@@ -1501,11 +1495,6 @@ func (s *Server) runBulkWriteBack(
 				// running tallies the operator needs.
 				_ = progress.UpdateProgress(int(done), total,
 					fmt.Sprintf("processing %d/%d (%d written, %d failed, %d skipped)", done, total, written.Load(), failed.Load(), skipped.Load()))
-				if done%10 == 0 {
-					ckptMu.Lock()
-					_ = operations.SaveCheckpoint(store, opID, "bulk_write_back", "writing", int(done), total)
-					ckptMu.Unlock()
-				}
 			}
 		})
 	}
@@ -1539,7 +1528,6 @@ func (s *Server) runBulkWriteBack(
 		_ = progress.Log("info", "bulk write-back canceled before completing all books", nil)
 	}
 
-	_ = operations.ClearState(store, opID)
 	summary := fmt.Sprintf("bulk write-back complete: %d written, %d failed, %d skipped out of %d", written.Load(), failed.Load(), skipped.Load(), total)
 	_ = progress.Log("info", summary, nil)
 	if s.activityWriter != nil {
