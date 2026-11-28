@@ -887,7 +887,12 @@ func (p *PebbleStore) RehashUserPassword(userID, verifiedHash, algo, hash string
 
 // ListUsers lists every user whose row decodes. An undecodable row is logged
 // and skipped; ListUsersStrict reports it instead.
+//
+// Under core identity it is core's account list (user_directory.go).
 func (p *PebbleStore) ListUsers() ([]User, error) {
+	if users, ok, err := p.directoryUsers(); ok {
+		return users, err
+	}
 	users, bad, err := p.listUsers()
 	if err != nil {
 		return nil, err
@@ -900,8 +905,12 @@ func (p *PebbleStore) ListUsers() ([]User, error) {
 
 // ListUsersStrict is ListUsers, but any undecodable user row is an error
 // (ErrUndecodableUserRows) naming how many and the first key. The decodable
-// users are returned alongside it.
+// users are returned alongside it. Under core identity it is core's account
+// list (user_directory.go), where no row is undecodable.
 func (p *PebbleStore) ListUsersStrict() ([]User, error) {
+	if users, ok, err := p.directoryUsers(); ok {
+		return users, err
+	}
 	users, bad, err := p.listUsers()
 	if err != nil {
 		return nil, err
