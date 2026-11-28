@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
+	"slices"
 
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/integrations"
@@ -110,8 +111,7 @@ func (s *integrationsServices) built(name string, fn func(ctx context.Context) e
 // call closes nothing.
 func (s *integrationsServices) close(ctx context.Context) error {
 	var errs []error
-	for i := len(s.closers) - 1; i >= 0; i-- {
-		c := s.closers[i]
+	for _, c := range slices.Backward(s.closers) {
 		if err := c.fn(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("kernel: integrations: close %s: %w", c.name, err))
 		}
