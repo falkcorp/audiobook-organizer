@@ -1,0 +1,3 @@
+### Changed
+
+- After the identity switch a fresh install is set up admin first. The setup page creates the first administrator through core (`POST /api/core/v1/auth/setup`, with the bootstrap token the server writes at start), and the setup wizard's library path and playlist folder are saved in that administrator's session. Before the first account exists, `PUT /api/v1/config` answers 401 to everyone: there is no longer a first-run window in which an anonymous caller may save settings. The web app already showed Setup or Login, never the wizard, while sign-in is required and no one is signed in; tests now pin that order.
