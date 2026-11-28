@@ -9,11 +9,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/falkcorp/mediacore/coretest/logcapture"
 	"github.com/falkcorp/mediacore/internal/taskstore"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
@@ -361,5 +363,68 @@ func TestDefSnapshot_RoundTripsEveryView(t *testing.T) {
 				t.Fatalf("decodeView(%s) = %s, %v; want %v, %s", raw, req, st, c.state, c.req)
 			}
 		})
+	}
+}
+
+// TestMayView_NamesTheKindItHides (R3, operator-facing): when a read leaves
+// out the runs of a kind because it has no usable View snapshot, the log
+// says so once per kind per request, with the kind and the reason and nothing
+// of a run. An admin listing the runs of a kind with a version-1 snapshot gets
+// the line and no run data. Killed by dropping the Info call.
+func TestMayView_NamesTheKindItHides(t *testing.T) {
+	lc := logcapture.New(t)
+	h := reachHarness(t, func(o *Options) { o.Logger = lc.Logger() })
+	putSnapshot(t, h, "gotham.stale", []byte(`{"v":1,"shape":"task","title":"Stale"}`))
+	var recs []tasks.RunRecord
+	for i := range 5 {
+		recs = append(recs, doneRun(fmt.Sprintf("stale-%d", i), "gotham.stale", tasks.StateSucceeded))
+		recs = append(recs, doneRun(fmt.Sprintf("nosnap-%d", i), "gotham.nosnap", tasks.StateSucceeded))
+	}
+	importRuns(t, h, recs)
+	hidden := func() (lines []string) {
+		for _, r := range lc.Records() {
+			if r.Message != "task runs of a kind are hidden from every caller" {
+				continue
+			}
+			var kind, reason string
+			r.Attrs(func(a slog.Attr) bool {
+				switch a.Key {
+				case "kind":
+					kind = a.Value.String()
+				case "reason":
+					reason = a.Value.String()
+				default:
+					t.Errorf("hidden-kind line carries %q, only kind and reason are allowed", a.Key)
+				}
+				return true
+			})
+			lines = append(lines, kind+"|"+reason)
+		}
+		slices.Sort(lines)
+		return lines
+	}
+	n := 0
+	for range h.x.Runs(adminCtx(), tasks.RunQuery{}) {
+		n++
+	}
+	if n != 0 {
+		t.Fatalf("admin listed %d runs of kinds with no usable snapshot, want none", n)
+	}
+	want := []string{"gotham.nosnap|no view snapshot", "gotham.stale|no view snapshot"}
+	if got := hidden(); !slices.Equal(got, want) {
+		t.Fatalf("one list of 10 runs of two hidden kinds logged %q, want exactly %q (once per kind)", got, want)
+	}
+	// A second request is a second read: its own lines.
+	_, _ = h.x.Get(adminCtx(), "stale-1")
+	if got := hidden(); len(got) != 3 {
+		t.Fatalf("after a Get of a hidden run the log has %d lines, want 3", len(got))
+	}
+	// A registered kind, and a kernel-internal read, log nothing.
+	before := len(hidden())
+	importRuns(t, h, []tasks.RunRecord{doneRun("patrol-1", "gotham.patrol", tasks.StateSucceeded)})
+	_, _ = h.x.Get(viewerCtx(), "patrol-1")
+	_, _ = h.x.Get(context.Background(), "stale-1")
+	if got := len(hidden()); got != before {
+		t.Fatalf("a registered kind or an internal read logged %d new lines", got-before)
 	}
 }

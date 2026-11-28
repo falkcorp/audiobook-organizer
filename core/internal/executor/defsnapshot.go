@@ -153,28 +153,30 @@ func decodeView(raw []byte) (rbac.Requirement, viewState) {
 	return r, viewRequires
 }
 
+// reasonNoViewSnapshot is the log reason for a kind whose runs are hidden
+// because its snapshot is missing, unreadable, version 1, or has no usable View.
+const reasonNoViewSnapshot = "no view snapshot"
+
 // storedView is the View rule kind's snapshot records. A store that cannot be
-// read, and an executor built with no Options.Keyspace (no snapshot is
-// reachable), answer viewUnknown.
-func (e *executor) storedView(ctx context.Context, kind tasks.Kind) (rbac.Requirement, viewState) {
+// read (the error is returned beside it), and an executor built with no
+// Options.Keyspace (no snapshot is reachable), answer viewUnknown.
+func (e *executor) storedView(ctx context.Context, kind tasks.Kind) (rbac.Requirement, viewState, error) {
 	if e.idem == nil {
-		return rbac.Requirement{}, viewUnknown
+		return rbac.Requirement{}, viewUnknown, nil
 	}
 	raw, found, err := e.idem.Get(ctx, taskstore.DefKey(string(kind)))
 	if err != nil {
-		e.log.Warn("task definition snapshot unreadable; the runs of its kind are hidden", "kind", string(kind), "err", err)
 		e.ins.undecodable("definition_snapshot")
-		return rbac.Requirement{}, viewUnknown
+		return rbac.Requirement{}, viewUnknown, err
 	}
 	if !found {
-		return rbac.Requirement{}, viewUnknown
+		return rbac.Requirement{}, viewUnknown, nil
 	}
 	r, st := decodeView(raw)
 	if st == viewUnknown {
-		e.log.Warn("task definition snapshot has no usable View record; the runs of its kind are hidden", "kind", string(kind))
 		e.ins.undecodable("definition_snapshot")
 	}
-	return r, st
+	return r, st, nil
 }
 
 // viewer answers mayView for one caller over one read (a Get, a Runs
@@ -221,7 +223,7 @@ func (v *viewer) decide(kind tasks.Kind) bool {
 		}
 		return v.who.Has(scopeTasksView)
 	}
-	req, st := v.e.storedView(v.ctx, kind)
+	req, st, err := v.e.storedView(v.ctx, kind)
 	switch st {
 	case viewDefault:
 		return v.who.Has(scopeTasksView)
@@ -231,6 +233,13 @@ func (v *viewer) decide(kind tasks.Kind) bool {
 		}
 		return v.who.Satisfies(req)
 	default:
+		// The reason an admin sees an empty list: once per kind per read (the
+		// memo calls decide once per kind), never a run id or a param.
+		args := []any{"kind", string(kind), "reason", reasonNoViewSnapshot}
+		if err != nil {
+			args = append(args, "err", err)
+		}
+		v.e.log.Info("task runs of a kind are hidden from every caller", args...)
 		return false
 	}
 }
