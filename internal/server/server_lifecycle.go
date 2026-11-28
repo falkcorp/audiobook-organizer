@@ -2102,14 +2102,19 @@ func (s *Server) seedRolesAndTokens() {
 	// Seed / refresh the multi-user roles (spec 3.7). Idempotent: if
 	// the permission set in auth.SeedRoles has grown since last boot,
 	// existing roles pick up the new entries automatically.
-	if created, updated, err := auth.SeedRoles(s.storeForWiring()); err != nil {
-		slog.Warn("seed roles", "err", err)
-	} else if created > 0 || updated > 0 {
-		slog.Info("seed roles created, updated", "created", created, "updated", updated)
-	}
-	// Core boot has already seeded its system user. The legacy user claim is
-	// retired under core identity, so this startup path must not write to it.
+	//
+	// Under core identity neither seed runs: core owns the roles and its boot
+	// has already seeded its system user, and the role: and u: claims are
+	// retired (M3 drained them), so either write would be refused and logged
+	// as a WARN on every start (the 2026-11-24 rehearsal's "seed roles" and
+	// "seed system user" lines). TestIdentityBoot_NoLegacySeedWarnings pins it.
 	if s.identity == nil {
+		if created, updated, err := auth.SeedRoles(s.storeForWiring()); err != nil {
+			slog.Warn("seed roles", "err", err)
+		} else if created > 0 || updated > 0 {
+			slog.Info("seed roles created, updated", "created", created, "updated", updated)
+		}
+
 		if err := auth.SeedSystemUser(s.storeForWiring()); err != nil {
 			slog.Warn("seed system user", "err", err)
 		}
