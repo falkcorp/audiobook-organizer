@@ -67,14 +67,28 @@ type Operation struct {
 	// empty list, which overrides the document default.
 	Public bool
 	// Guards is x-mediacore-guards ("interactive", "session", "owner"); empty omits it.
-	Guards     []string
-	Parameters []Parameter
+	Guards []string
+	// CoRequirements is x-mediacore-co-requirements: the requirements an app
+	// ANDs onto this route for the requests whose path parameter Param has
+	// Value (httpapi.CoRequirement). Permission above is not widened or
+	// narrowed by them. Empty omits it.
+	CoRequirements []CoRequirement
+	Parameters     []Parameter
 	// RequestBody is the component name of the JSON request body; "" = none.
 	RequestBody string
 	// SuccessStatus is the success status code (200, 201, 204).
 	SuccessStatus int
 	// Success is the component name of the success body; "" = no body.
 	Success string
+}
+
+// CoRequirement is one per-value co-requirement of an Operation: Permission
+// (a requirement String) is also required of a request whose path parameter
+// Param equals Value.
+type CoRequirement struct {
+	Param      string `json:"param"`
+	Value      string `json:"value"`
+	Permission string `json:"permission"`
 }
 
 // Parameter is a path, query or header parameter.
@@ -115,6 +129,7 @@ type OperationObject struct {
 	Security    *[]map[string][]string `json:"security,omitempty"`
 	Permission  string                 `json:"x-mediacore-permission"`
 	Guards      []string               `json:"x-mediacore-guards,omitempty"`
+	CoReqs      []CoRequirement        `json:"x-mediacore-co-requirements,omitempty"`
 }
 
 // ParameterObject is the JSON form of one Parameter.
@@ -243,6 +258,7 @@ func operationObject(op Operation, problem string, has func(string) bool) (*Oper
 		Tags:        op.Tags,
 		Permission:  op.Permission,
 		Guards:      op.Guards,
+		CoReqs:      op.CoRequirements,
 		Responses: map[string]Response{
 			"default": {Description: "Problem", Content: map[string]MediaType{
 				"application/problem+json": {Schema: Ref(problem)}}},

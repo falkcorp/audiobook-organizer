@@ -27,6 +27,7 @@ import (
 
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/coretest/logcapture"
+	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/kernel"
 	"github.com/falkcorp/mediacore/module"
@@ -76,8 +77,8 @@ type settings struct {
 	disabled []module.ID
 	config   map[string]any
 	users    map[string][]rbac.Permission
-	runs     []bootseam.TaskRunSeed      // WithRuns
-	coReqs   map[string]rbac.Requirement // WithRouteCoRequirements
+	runs     []bootseam.TaskRunSeed  // WithRuns
+	coReqs   []httpapi.CoRequirement // WithRouteCoRequirements
 }
 
 // WithModules adds modules to the App, in order. With none, the harness boots
@@ -109,13 +110,14 @@ func WithConfig(kv map[string]any) Option {
 	}
 }
 
-// WithRouteCoRequirements is app.Options.RouteCoRequirements: core route name
-// to a requirement the router ANDs onto the route's own (narrowing only). It
+// WithRouteCoRequirements is app.Options.RouteCoRequirements: requirements the
+// router ANDs onto a core route's own, route-wide or for one value of a path
+// wildcard (narrowing only). It
 // reaches the App through the same kernel path an app's map takes, so a boot
 // that refuses an entry fails the test, and a later call replaces an earlier
 // one. The scopes it names must be declared by a module passed to WithModules.
-func WithRouteCoRequirements(m map[string]rbac.Requirement) Option {
-	return func(s *settings) { s.coReqs = maps.Clone(m) }
+func WithRouteCoRequirements(c []httpapi.CoRequirement) Option {
+	return func(s *settings) { s.coReqs = slices.Clone(c) }
 }
 
 // WithUser pre-seeds a principal named name holding exactly perms: a stored

@@ -58,6 +58,9 @@ func (r *Router) OpenAPI(owner string) (*openapi.Document, error) {
 			Guards:        guardNames(e.info.Guards),
 			SuccessStatus: e.status,
 		}
+		for _, c := range snap.coBy {
+			op.CoRequirements = append(op.CoRequirements, openapi.CoRequirement{Param: c.param, Value: c.value, Permission: c.need.String()})
+		}
 		params := e.rawParams
 		if e.binding != nil {
 			params = e.binding.parameters()

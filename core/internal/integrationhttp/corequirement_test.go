@@ -66,7 +66,7 @@ func appCatalog(t *testing.T) *rbac.Catalog {
 }
 
 // coRequiredRouter mounts Register with co as the router's co-requirements.
-func coRequiredRouter(t *testing.T, co map[string]rbac.Requirement) (http.Handler, error) {
+func coRequiredRouter(t *testing.T, co []httpapi.CoRequirement) (http.Handler, error) {
 	t.Helper()
 	e := newEnv(t)
 	r := httpapi.NewRouter(httpapi.Options{CoRequirements: co}, httpapi.Deps{Log: slog.New(slog.DiscardHandler)})
@@ -92,9 +92,9 @@ func coRequiredRouter(t *testing.T, co map[string]rbac.Requirement) (http.Handle
 // and an app-scope-only principal is refused for the core scope. The read
 // routes are not named and keep their own requirement.
 func TestRegister_ManageRoutesTakeTheAppCoRequirement(t *testing.T) {
-	co := map[string]rbac.Requirement{}
+	var co []httpapi.CoRequirement
 	for _, n := range manageRouteNames() {
-		co[n] = rbac.Need(appManage)
+		co = append(co, httpapi.CoRequirement{Route: n, Need: rbac.Need(appManage)})
 	}
 	h, err := coRequiredRouter(t, co)
 	if err != nil {

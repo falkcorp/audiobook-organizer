@@ -33,7 +33,7 @@ const coreUsersPath = "/api/core/v1/users"
 // admitted on the same route of a boot with no map, the principal holding
 // both is admitted, and Routes() reports the combined requirement.
 func TestRouteCoRequirement_ReachesTheRouterThroughTheKernel(t *testing.T) {
-	co := map[string]rbac.Requirement{"listUsers": rbac.Need(permAdmin)}
+	co := []httpapi.CoRequirement{{Route: "listUsers", Need: rbac.Need(permAdmin)}}
 	users := []Option{
 		WithModules(greeter{}),
 		WithUser("core-only", "core:users.view"),
@@ -87,10 +87,10 @@ func TestRouteCoRequirement_ReachesTheRouterThroughTheKernel(t *testing.T) {
 // declares refuses it, so Describe cannot generate a document for a boot that
 // would refuse.
 func TestRouteCoRequirement_DescribeDocumentsIt(t *testing.T) {
-	opts := func(co map[string]rbac.Requirement) app.Options {
+	opts := func(co []httpapi.CoRequirement) app.Options {
 		return app.Options{AppID: harnessAppID, Args: []string{}, Env: []string{}, IdentityBoot: true, RouteCoRequirements: co}
 	}
-	d, err := app.Describe(context.Background(), opts(map[string]rbac.Requirement{"listUsers": rbac.Need(permAdmin)}), greeter{})
+	d, err := app.Describe(context.Background(), opts([]httpapi.CoRequirement{{Route: "listUsers", Need: rbac.Need(permAdmin)}}), greeter{})
 	if err != nil {
 		t.Fatalf("Describe with a co-requirement: %v", err)
 	}
@@ -98,10 +98,44 @@ func TestRouteCoRequirement_DescribeDocumentsIt(t *testing.T) {
 	if want := `"x-mediacore-permission":"all(core:users.view,` + string(permAdmin) + `)"`; !strings.Contains(compact(doc), want) {
 		t.Errorf("the core document does not show listUsers requiring %s", want)
 	}
-	if _, err := app.Describe(context.Background(), opts(map[string]rbac.Requirement{"listUsers": rbac.Need("hello:ghost")}), greeter{}); err == nil {
+	if _, err := app.Describe(context.Background(), opts([]httpapi.CoRequirement{{Route: "listUsers", Need: rbac.Need("hello:ghost")}}), greeter{}); err == nil {
 		t.Error("Describe accepted a co-scope no manifest declares")
 	} else if !errors.Is(err, httpapi.ErrCoRequirementUnregistered) {
 		t.Errorf("Describe error is not ErrCoRequirementUnregistered: %v", err)
+	}
+}
+
+// TestRouteCoRequirement_PerValueEntryReachesTheRouter: a per-value entry
+// (Param, Value) survives the trip Options -> kernel.Config -> router and gates
+// only the request that carries the value, on a real core route with a path
+// wildcard (getRole, GET /roles/{name}, own requirement core:roles.view). The
+// role names are made up: the gate is stage 13's, before any lookup, so the
+// ungated answer is the handler's (404), never 403.
+func TestRouteCoRequirement_PerValueEntryReachesTheRouter(t *testing.T) {
+	co := []httpapi.CoRequirement{{Route: "getRole", Param: "name", Value: "batcave", Need: rbac.Need(permAdmin)}}
+	h := New(t, WithModules(greeter{}), WithRouteCoRequirements(co),
+		WithUser("core-only", "core:roles.view"), WithUser("both", "core:roles.view", permAdmin))
+	var p httpapi.Problem
+	if got := h.As("core-only").GetJSON(t, "/api/core/v1/roles/batcave", &p); got != http.StatusForbidden || p.Required != string(permAdmin) {
+		t.Fatalf("core-only GET roles/batcave = %d requiring %q, want 403 requiring %q: the kernel did not hand the per-value entry to the router", got, p.Required, permAdmin)
+	}
+	if got := h.As("core-only").GetJSON(t, "/api/core/v1/roles/alfred", nil); got == http.StatusForbidden {
+		t.Errorf("core-only GET roles/alfred = 403: the entry gated a value it does not name")
+	}
+	if got := h.As("both").GetJSON(t, "/api/core/v1/roles/batcave", nil); got == http.StatusForbidden {
+		t.Errorf("both-scopes GET roles/batcave = 403, want it past stage 13")
+	}
+	found := false
+	for ri := range h.App().Routes() {
+		if ri.Name == "getRole" {
+			found = true
+			if len(ri.CoValuePerms) != 1 || ri.CoValuePerms[0].Param != "name" || ri.CoValuePerms[0].Value != "batcave" {
+				t.Errorf("Routes(): getRole CoValuePerms = %+v, want name=batcave", ri.CoValuePerms)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("getRole is not in Routes()")
 	}
 }
 
@@ -160,7 +194,7 @@ func TestRouteCoRequirement_AuthDisabledOnEveryAuthRequiredOnlyCoreRoute(t *test
 			if want.Refusal == nil {
 				t.Fatalf("%s: with no co-requirement the auth-disabled principal is admitted: the premise of the cell is wrong", ri.Name)
 			}
-			req.CoPerm = co
+			req.CoPerms = []rbac.Requirement{co}
 			got := httpapi.Authorize(req, httpapi.AuthzOptions{Catalog: cat})
 			if got.Refusal == nil {
 				t.Errorf("%s (own %s) with co %s: the auth-disabled principal is ADMITTED; it is refused with no co-requirement", ri.Name, ri.Perm, co)

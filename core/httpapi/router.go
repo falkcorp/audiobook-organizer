@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
-	"maps"
 	"net/http"
 	"net/netip"
 	"slices"
@@ -99,18 +98,20 @@ type Options struct {
 	// app.Options.ServiceName (06 §6.4.5), the value it also passes as
 	// metrics.Options.ServiceName (ABO: "audiobook-organizer"; default: AppID).
 	ServerName string
-	// CoRequirements maps the Name of a core route to a requirement the router
-	// ANDs onto the route's own: a request is admitted only when the route's
-	// own requirement admits it and then the co-requirement does, each judged
-	// on its own (AuthzRequest.CoPerm). It is how an app narrows a core route
-	// to its own scopes, which core's R6 forbids a core route to name
-	// (app.Options.RouteCoRequirements). Build refuses an entry that names no
-	// core route, is not AllOf or Need, names Public, AnyAuthenticated,
-	// core:admin or a core-namespace scope, names a scope the catalog flags
-	// Sensitive or Confining, or names a scope the catalog SetAuth was given
-	// does not declare (ErrCoRequirement*). nil or empty changes nothing.
-	// Read at Build; SetPerimeter ignores it.
-	CoRequirements map[string]rbac.Requirement
+	// CoRequirements are requirements the router ANDs onto a core route's own,
+	// for the whole route or for the requests whose path wildcard has one
+	// value (CoRequirement): a request is admitted only when the route's own
+	// requirement admits it and then every co-requirement that applies to it
+	// does, each judged on its own (AuthzRequest.CoPerms). It is how an app
+	// narrows a core route to its own scopes, which core's R6 forbids a core
+	// route to name (app.Options.RouteCoRequirements). Build refuses an entry
+	// that names no core route, is not AllOf or Need, names Public,
+	// AnyAuthenticated, core:admin or a core-namespace scope, names a scope
+	// the catalog flags Sensitive or Confining, names a scope the catalog
+	// SetAuth was given does not declare, has a bad Param or Value, or
+	// repeats another entry's (Route, Param, Value) (ErrCoRequirement*). nil
+	// or empty changes nothing. Read at Build; SetPerimeter ignores it.
+	CoRequirements []CoRequirement
 }
 
 // TrustedPeer is a prefix or a single address that may carry an IPv6 zone
@@ -190,14 +191,21 @@ type RouteInfo struct {
 	Kind       RouteKind // Native, Raw, Legacy, Infra, SPA (Facade: deferred-build, §3.6)
 	OwnAuth    bool      // legacy route authenticated by its own (ABS) authenticator (§8.2)
 	AuthMethod string    // the auth method an OwnAuth route names (§8.2)
-	// CoPerm is the app-declared co-requirement (Options.CoRequirements) that
-	// Routes ANDs into Perm for display: Perm is then AllOf(the route's own
-	// permissions plus CoPerm's), what OpenAPI documents. Stage 13 does not
-	// judge that AllOf: it judges the route's own requirement and CoPerm one
-	// after the other, so the AND never widens access (AuthzRequest.CoPerm).
-	// The zero Requirement when the route has none, and always zero in the
+	// CoPerm is the app-declared route-wide co-requirement
+	// (Options.CoRequirements, Param and Value empty) that Routes ANDs into
+	// Perm for display: Perm is then AllOf(the route's own permissions plus
+	// CoPerm's), what OpenAPI documents. Stage 13 does not judge that AllOf:
+	// it judges the route's own requirement and each co-requirement one after
+	// the other, so the AND never widens access (AuthzRequest.CoPerms). The
+	// zero Requirement when the route has none, and always zero in the
 	// RouteInfo Handle recorded and R6's checkPerm judges.
 	CoPerm rbac.Requirement
+	// CoValuePerms are the route's per-value co-requirements (Param and Value
+	// set), each applying only to the requests whose wildcard has that value.
+	// They are not folded into Perm, which no single request carries them
+	// all; OpenAPI lists them as x-co-requirements. nil when the route has
+	// none, and always nil in the RouteInfo Handle recorded.
+	CoValuePerms []CoValuePerm
 }
 
 // SPAOptions is what the kernel passes with the shell handler at P8 (06
@@ -281,7 +289,7 @@ func NewRouter(opts Options, deps Deps) *Router {
 	if opts.CoreGroupBase == "" {
 		opts.CoreGroupBase = "/api/core/v1"
 	}
-	opts.CoRequirements = maps.Clone(opts.CoRequirements)
+	opts.CoRequirements = slices.Clone(opts.CoRequirements)
 	return &Router{opts: opts, deps: deps, groups: map[string]*Group{}, public: map[string]map[string]bool{}}
 }
 
@@ -661,6 +669,9 @@ func (r *Router) Routes() iter.Seq[RouteInfo] {
 			if !e.co.IsZero() {
 				ri.Perm, ri.CoPerm = e.perm(), e.co
 			}
+			for _, c := range e.coBy {
+				ri.CoValuePerms = append(ri.CoValuePerms, CoValuePerm{Param: c.param, Value: c.value, Perm: c.need})
+			}
 			infos = append(infos, ri)
 		}
 		infos = append(infos, r.legacy.infos...)
@@ -682,6 +693,7 @@ func (r *Router) Routes() iter.Seq[RouteInfo] {
 type routeSnap struct {
 	entry *routeEntry
 	perm  rbac.Requirement // entry.perm(), captured with the lock held (entry.co is written by Build)
+	coBy  []coRule         // entry.coBy, a copy taken with the lock held
 }
 
 // routeSnapshot is the registered routes at the time of the call, each with
@@ -692,7 +704,7 @@ func (r *Router) routeSnapshot() []routeSnap {
 	defer r.mu.Unlock()
 	out := make([]routeSnap, len(r.routes))
 	for i, e := range r.routes {
-		out[i] = routeSnap{entry: e, perm: e.perm()}
+		out[i] = routeSnap{entry: e, perm: e.perm(), coBy: slices.Clone(e.coBy)}
 	}
 	return out
 }
@@ -920,7 +932,7 @@ func register(mux *http.ServeMux, pattern string, h http.Handler) (err error) {
 func (r *Router) wrapRoute(e *routeEntry) http.Handler {
 	h := e.handler
 	if r.authRuns(e) {
-		h = r.authWrap(e.info.Perm, e.co, e.info.Guards, false, routeLabel(e.info), h)
+		h = r.authWrap(e.info.Perm, e.coRules(), e.info.Guards, false, routeLabel(e.info), h)
 	}
 	return r.chain.Route(httpmw.RouteSpec{
 		Pattern: e.info.Pattern,

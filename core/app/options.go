@@ -18,7 +18,6 @@ import (
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/metrics"
-	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/ui"
 	"github.com/falkcorp/mediacore/updater"
@@ -167,20 +166,24 @@ type Options struct {
 	// atom route sets nothing.
 	ResolveAtom httpapi.AtomResolver
 
-	// RouteCoRequirements maps the Name of a core route to a requirement the
-	// router ANDs onto the route's own: a request is admitted only when the
-	// route's own requirement admits it and then the co-requirement does, each
-	// judged on its own, so it can only narrow access, never widen or replace
-	// it. It is how an app asks of a
-	// core route a scope of its own namespace, which core's R6 does not let a
-	// core route name (ABO: books:integrations.manage on the integrations manage
-	// routes, 05-rbac §6.1). Boot is refused, with an httpapi.ErrCoRequirement*
-	// error, for an entry that names no core route, is not AllOf or Need, names
-	// Public, AnyAuthenticated, core:admin or a core-namespace scope, names a
-	// scope the catalog flags Sensitive or Confining, or names a scope the rbac
-	// catalog has not registered. Read by an identity boot
+	// RouteCoRequirements are requirements the router ANDs onto a core route's
+	// own, for the whole route or, when an entry names a path wildcard and a
+	// value of it, only for the requests that carry that value (a route that
+	// serves one operation per kind: the app gates the download kind and not
+	// the others). A request is admitted only when the route's own requirement
+	// admits it and then every entry that applies to it does, each judged on
+	// its own, so it can only narrow access, never widen or replace it. It is
+	// how an app asks of a core route a scope of its own namespace, which
+	// core's R6 does not let a core route name (ABO: books:integrations.manage
+	// on the integrations manage routes, 05-rbac §6.1). Boot is refused, with
+	// an httpapi.ErrCoRequirement* error, for an entry that names no core
+	// route, is not AllOf or Need, names Public, AnyAuthenticated, core:admin
+	// or a core-namespace scope, names a scope the catalog flags Sensitive or
+	// Confining or the rbac catalog has not registered, has a Param that is
+	// not a single-segment wildcard of the route or a bad Value, or repeats
+	// another entry's (Route, Param, Value). Read by an identity boot
 	// (IdentityBoot) and by Describe; nil, the default, changes nothing.
-	RouteCoRequirements map[string]rbac.Requirement
+	RouteCoRequirements []httpapi.CoRequirement
 
 	// ArchivePrefix is the prefix of the app's backup archive names and of the
 	// revocation journal's file name and header (05-backup §5B.3.6 row "Where":

@@ -50,16 +50,18 @@ type AuthzRequest struct {
 	// Perm and Guards are the route's (Route.Perm/Guards, LegacyRoute.Perm/Guards).
 	Perm   rbac.Requirement
 	Guards Guards
-	// CoPerm is the app's co-requirement on the route (Options.CoRequirements),
-	// the zero Requirement when it has none. It is judged SEPARATELY from
-	// Perm, after Perm admits, and the request is admitted only when both
-	// hold: it can only narrow. It is never merged into Perm, because the
-	// auth-disabled checker drops the AuthRequired members of a requirement
-	// before it judges it (05-rbac 4.11), and a merged AllOf would let a
-	// co-scope that is not AuthRequired keep an AuthRequired-only route
-	// satisfiable. A non-zero CoPerm on a Public Perm makes the route
-	// non-Public: it is never read as Public.
-	CoPerm rbac.Requirement
+	// CoPerms are the app's co-requirements that apply to this request
+	// (Options.CoRequirements: the route-wide one, and each per-value one
+	// whose wildcard value the request carries); nil when none does. Each is
+	// judged SEPARATELY from Perm and from the others, in order, after Perm
+	// admits, and the request is admitted only when all hold: they can only
+	// narrow. They are never merged into Perm, because the auth-disabled
+	// checker drops the AuthRequired members of a requirement before it
+	// judges it (05-rbac 4.11), and a merged AllOf would let a co-scope that
+	// is not AuthRequired keep an AuthRequired-only route satisfiable. A
+	// non-zero CoPerms on a Public Perm makes the route non-Public: it is
+	// never read as Public.
+	CoPerms []rbac.Requirement
 	// Failure is what stage 12 recorded (auth.FailureFrom), nil when none.
 	Failure *auth.Failure
 	// Principal is what stage 12 bound (auth.PrincipalFrom), nil when none.
@@ -115,7 +117,7 @@ func (d AuthzDecision) Admitted() bool { return d.Refusal == nil }
 // carries Guards is judged as a non-Public one (the guards need a principal).
 // Authorize audits nothing and writes nothing.
 func Authorize(req AuthzRequest, opts AuthzOptions) AuthzDecision {
-	public := req.Perm.Kind() == rbac.KindPublic && req.CoPerm.IsZero() && req.Guards == (Guards{})
+	public := req.Perm.Kind() == rbac.KindPublic && len(req.CoPerms) == 0 && req.Guards == (Guards{})
 	if f := req.Failure; f != nil {
 		if public && f.Cookie {
 			return AuthzDecision{ClearCookie: true}
@@ -143,7 +145,12 @@ func Authorize(req AuthzRequest, opts AuthzOptions) AuthzDecision {
 	if e := permRefusal(p, req.Perm, opts); e != nil {
 		return refuse(e)
 	}
-	return refuse(coPermRefusal(p, req.CoPerm, opts))
+	for _, co := range req.CoPerms {
+		if e := coPermRefusal(p, co, opts); e != nil {
+			return refuse(e)
+		}
+	}
+	return AuthzDecision{}
 }
 
 func refuse(e *Error) AuthzDecision { return AuthzDecision{Refusal: e} }
@@ -166,7 +173,7 @@ func ownerRefusal(p *auth.Principal, required bool) *Error {
 	return nil
 }
 
-// coPermRefusal is the CoPerm step, run only after Perm admitted: nil when
+// coPermRefusal is one CoPerms step, run only after Perm admitted: nil when
 // there is no co-requirement or p's checker satisfies it on its own. It is
 // the same judgement as permRefusal's, so an auth-disabled principal is
 // refused (AuthOffRefusal) unless it satisfies the co-requirement by itself
@@ -335,10 +342,11 @@ type Stage13Options struct {
 	// only; unexported so no caller of Stage13 can drop a native route's
 	// owner leg.
 	ownerWhenSet bool
-	// coPerm is the route's co-requirement (routeEntry.co), set by authWrap
-	// only and judged beside the perm Stage13 is given, never merged into it
-	// (AuthzRequest.CoPerm). Unexported: only the router attaches one.
-	coPerm rbac.Requirement
+	// coRules are the route's co-requirements (routeEntry.coRules), set by
+	// authWrap only and judged beside the perm Stage13 is given, never merged
+	// into it (AuthzRequest.CoPerms). Unexported: only the router attaches
+	// them.
+	coRules []coRule
 }
 
 // ErrStage13Options is Stage13's refusal of options it cannot run with.
@@ -400,7 +408,12 @@ func stage13(perm rbac.Requirement, guards Guards, o Stage13Options, outcome fun
 				// everyone else, admin included).
 				g.Owner = false
 			}
-			req := AuthzRequest{Perm: perm, CoPerm: o.coPerm, Guards: g}
+			req := AuthzRequest{Perm: perm, Guards: g}
+			for _, c := range o.coRules {
+				if c.applies(r) {
+					req.CoPerms = append(req.CoPerms, c.need)
+				}
+			}
 			req.Failure, req.Principal = outcome(r)
 			d := Authorize(req, AuthzOptions{OwnerRequired: ownerRequired, ResolveAtom: o.ResolveAtom, Catalog: o.Catalog})
 			if d.ClearCookie {

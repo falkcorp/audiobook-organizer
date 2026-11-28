@@ -175,6 +175,11 @@ type routeEntry struct {
 	// written under Router.mu, so a reader outside the lock reads perm()
 	// from routeSnapshot, never e.co.
 	co rbac.Requirement
+	// coBy are the per-value co-requirements (CoRequirement.Param/Value):
+	// each applies only to the requests whose path wildcard has its value, and
+	// is judged beside co, after the route's own requirement. Written by Build
+	// under Router.mu like co; Routes reads a copy taken under it.
+	coBy []coRule
 
 	// native routes only
 	binding   *binding
