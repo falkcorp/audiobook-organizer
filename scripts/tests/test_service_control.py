@@ -172,6 +172,14 @@ class ServiceTargets(unittest.TestCase):
             self.assertIn(f"({prop} {shown}, so it may take up to {seconds_} s)", p.stdout)
             self.assertIn(f"wait up to {seconds_} s for", p.stdout)
 
+    def test_a_very_long_timeout_caps_the_wait_but_not_the_command(self) -> None:
+        host = self.host(unit_state("inactive"), rules=timeout_rules(start="2h"))
+        host.h["env"].pop("AORG_OH_WAIT_SEC")
+        p = host.make("service-start", DRY_RUN="1")
+        self.assertEqual(p.returncode, 0, out(p))
+        self.assertIn("so it may take up to 7260 s", p.stdout)
+        self.assertIn(f"wait up to {scm.MAX_WAIT_SEC} s for", p.stdout)
+
     def test_a_timeout_that_cannot_be_read_changes_nothing(self) -> None:
         for target, prop in (
             ("service-start", "TimeoutStartUSec"),
