@@ -132,7 +132,12 @@ func TestFirstRun_WizardWritesOverTheRealCoreStore(t *testing.T) {
 	r := runFlippedFresh(t)
 	users, err := r.store.ListUsers()
 	require.NoError(t, err)
-	require.Empty(t, users, "a fresh install has no user")
+	// Under core identity the store lists core's accounts, and a fresh install
+	// holds exactly one: core's _system attribution account, which cannot sign
+	// in (HEAD's ListUsers listed its _system row the same way).
+	require.Len(t, users, 1, "a fresh install has no account but core's system account: %v", users)
+	require.Equal(t, "_system", users[0].ID)
+	require.Equal(t, "system", users[0].Status)
 	admin := setupFirstAdmin(t, r)
 
 	lib := filepath.Join(t.TempDir(), "library")
