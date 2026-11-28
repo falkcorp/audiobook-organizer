@@ -384,6 +384,20 @@ func registeredByTheRealModule(t *testing.T) {
 	require.NotEmpty(t, settings)
 	require.ElementsMatch(t, settings, puc.Perms.Start.Permissions(), "path-update starts under HEAD's settings.manage atom")
 
+	// HEAD-parity row (path_update.go:33-63 and the deluge kinds table): the
+	// event is not carried so a restart drops the run, normal priority, a one
+	// minute attempt. Start is the whole settings.manage atom (every scope
+	// required, which is how the atom spells "holds settings.manage"), and no
+	// viewer reaches it: core:settings.manage is action-class, outside what the
+	// kernel's SEC-9 check lets a viewer hold, and the kind carries no
+	// StartableByViewers reason.
+	require.Equal(t, tasks.ResumeDrop, puc.Resume, "HEAD Drop: the body keeps no checkpoint and its event is not carried")
+	require.Equal(t, tasks.PriorityNormal, puc.Priority)
+	require.Equal(t, time.Minute, puc.Timeout)
+	require.Equal(t, rbac.KindAllOf, puc.Perms.Start.Kind(), "settings.manage is the atom, every scope of it")
+	require.Empty(t, puc.Perms.StartableByViewers, "no viewer starts a torrent move")
+	require.Empty(t, puc.Perms.OwnerRouteOnly, "the generic start route runs it (HEAD's op start route did)")
+
 	hook := NewSchedules(ScheduleDeps{})
 	for _, k := range ScheduledKinds() {
 		d, ok := reg[k]
