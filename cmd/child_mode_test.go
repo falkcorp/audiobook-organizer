@@ -7,6 +7,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -176,5 +177,63 @@ func TestRunOperationRunner_ResolvesTheStateDirectory(t *testing.T) {
 	}
 	if code != 2 || !strings.Contains(out, restorejournal.ErrSwapPending.Error()) {
 		t.Fatalf("child mode exit code = %d, want 2 with the staged swap named (the slot under the resolved directory %s); output:\n%s", code, dbDir, out)
+	}
+}
+
+// A store whose identity cutover (M3) is done is core's: its user, role,
+// session and API-key rows are drained. The child builds its server without
+// server.WithIdentity, so HEAD's own gates (including the user-count first-run
+// bypass) would run over those empty tables and open. The child refuses before
+// it reaches the server. TestRunOperationRunner_EmptySettingsProceeds is the
+// other half: a store the cutover has not run on still proceeds.
+func TestRunOperationRunner_RefusesAStoreWhoseIdentityCutoverIsDone(t *testing.T) {
+	stateDir := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+	t.Setenv(config.SecureStateDirEnv, stateDir)
+	seedStarted(t, dbPath)
+
+	code, out := runChildModeHelperIn(t, "empty", stateDir, dbPath)
+	if code == reachedServerExitCode {
+		t.Fatalf("child mode built the server over a store whose identity cutover is done; output:\n%s", out)
+	}
+	if code != 2 {
+		t.Fatalf("child mode exit code = %d, want 2 (refused); output:\n%s", code, out)
+	}
+	if !strings.Contains(out, errChildOverIdentityStore.Error()) {
+		t.Errorf("child mode output does not carry the identity-cutover refusal:\n%s", out)
+	}
+}
+
+// cutoverStateStore is a store that answers the identity cutover's state as
+// told.
+type cutoverStateStore struct {
+	database.Store
+	done bool
+	err  error
+}
+
+func (s cutoverStateStore) DataMigrationDone(context.Context, string) (bool, error) {
+	return s.done, s.err
+}
+
+// refuseChildOverIdentityStore fails closed: only a store that says its
+// identity cutover is not done proceeds. A store that cannot be asked, and a
+// read that fails, both refuse.
+func TestRefuseChildOverIdentityStore_FailsClosed(t *testing.T) {
+	ctx := context.Background()
+	if err := refuseChildOverIdentityStore(ctx, cutoverStateStore{done: false}); err != nil {
+		t.Errorf("a store whose identity cutover is not done was refused: %v", err)
+	}
+	if err := refuseChildOverIdentityStore(ctx, cutoverStateStore{done: true}); !errors.Is(err, errChildOverIdentityStore) {
+		t.Errorf("a store whose identity cutover is done: err = %v, want errChildOverIdentityStore", err)
+	}
+	boom := errors.New("storage admin: closed")
+	if err := refuseChildOverIdentityStore(ctx, cutoverStateStore{err: boom}); !errors.Is(err, boom) {
+		t.Errorf("a failed read of the cutover state did not refuse with the read error: %v", err)
+	}
+	// A store with no way to answer (database.Store alone has no
+	// DataMigrationDone) is refused, not assumed to be unmigrated.
+	if err := refuseChildOverIdentityStore(ctx, nil); err == nil {
+		t.Error("a store that cannot report its identity cutover was let through")
 	}
 }
