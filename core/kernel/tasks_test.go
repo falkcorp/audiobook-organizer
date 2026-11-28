@@ -50,7 +50,7 @@ func patrol(mutate ...func(*tasks.TaskSpec[struct{}, struct{}])) tasks.Definitio
 	s := tasks.TaskSpec[struct{}, struct{}]{
 		Title:   "Patrol Gotham",
 		Effects: tasks.ReadOnly(),
-		Perms:   tasks.Permissions{Start: rbac.Need("gotham:patrol")},
+		Perms:   tasks.Permissions{Start: rbac.Need("gotham:patrol"), Manage: rbac.Need("gotham:manage")},
 		Resume:  tasks.ResumeFromZero,
 		Run:     func(*tasks.RC, struct{}) (struct{}, error) { return struct{}{}, nil },
 	}
@@ -404,7 +404,7 @@ func TestKernelTasks_LedgerMissingKindRefused(t *testing.T) {
 // kind two manifests list (ProblemDuplicateTaskKind).
 func TestKernelTasks_ForeignKindRefused(t *testing.T) {
 	joker := tasks.Task("joker.laugh", tasks.TaskSpec[struct{}, struct{}]{
-		Title: "Laugh", Effects: tasks.ReadOnly(), Perms: tasks.Permissions{Start: rbac.Need("gotham:patrol")}, Resume: tasks.ResumeFromZero,
+		Title: "Laugh", Effects: tasks.ReadOnly(), Perms: tasks.Permissions{Start: rbac.Need("gotham:patrol"), Manage: rbac.Need("gotham:manage")}, Resume: tasks.ResumeFromZero,
 		Run: func(*tasks.RC, struct{}) (struct{}, error) { return struct{}{}, nil },
 	})
 	t.Run("registered", func(t *testing.T) {
@@ -497,7 +497,7 @@ func TestKernelTasks_RegistrationRules(t *testing.T) {
 // no parallelism is refused at P7, wrapping tasks.ErrNoParallelism.
 func TestBatch_ZeroParallelismRefusedAtRegister(t *testing.T) {
 	batch := tasks.Batch(patrolKind, tasks.BatchSpec[struct{}, string, struct{}]{
-		Title: "Patrol the rooftops", Effects: tasks.ReadOnly(), Perms: tasks.Permissions{Start: rbac.Need("gotham:patrol")}, Resume: tasks.ResumeFromZero,
+		Title: "Patrol the rooftops", Effects: tasks.ReadOnly(), Perms: tasks.Permissions{Start: rbac.Need("gotham:patrol"), Manage: rbac.Need("gotham:manage")}, Resume: tasks.ResumeFromZero,
 		Source: func(*tasks.RC, struct{}) (tasks.Source[string], error) {
 			return tasks.Source[string]{}, errors.New("not reached")
 		},

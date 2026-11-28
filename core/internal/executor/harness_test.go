@@ -191,6 +191,14 @@ func perm(kind string) rbac.Requirement {
 	return rbac.Need(rbac.Permission(m + ":run"))
 }
 
+// manage is a kind's Perms.Manage: its module's manage scope (owner ruling
+// 2026-11-22), which a caller holds next to the operation's own scope to cancel,
+// discard, decide or approve a run of the kind.
+func manage(kind string) rbac.Requirement {
+	m, _, _ := strings.Cut(kind, ".")
+	return rbac.Need(rbac.Permission(m + ":manage"))
+}
+
 // casesRef is the resource the fixture kinds write.
 func casesRef(kind string) tasks.Resource {
 	m, _, _ := strings.Cut(kind, ".")
@@ -201,7 +209,7 @@ func common(kind string, edits ...func(*tasks.Common)) tasks.Common {
 	c := tasks.Common{
 		Title:   "Batcave " + kind,
 		Effects: tasks.Writes(casesRef(kind)),
-		Perms:   tasks.Permissions{Start: perm(kind)},
+		Perms:   tasks.Permissions{Start: perm(kind), Manage: manage(kind)},
 		Resume:  tasks.ResumeContinue,
 	}
 	for _, e := range edits {

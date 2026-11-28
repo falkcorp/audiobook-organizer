@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/mediacore/coretest"
 	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/integrations/ai"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/keys"
 	"github.com/falkcorp/mediacore/tasks"
@@ -275,10 +276,10 @@ func TestBatch_SubmitWithoutApplyTaskRefused(t *testing.T) {
 
 	// BatchApplyTask with a nil handler, or a handle another router minted,
 	// registers nothing: the definition has no Run and Problems says so.
-	if probs := tasks.Problems(ai.BatchApplyTask(e.c, nil, applyEffects())); len(probs) == 0 {
+	if probs := tasks.Problems(ai.BatchApplyTask(e.c, nil, applyEffects(), applyManage())); len(probs) == 0 {
 		t.Error("BatchApplyTask(nil handler) has no problems; registration must fail closed")
 	}
-	if probs := tasks.Problems(ai.BatchApplyTask(ai.Capability{}, noopHandler, applyEffects())); len(probs) == 0 {
+	if probs := tasks.Problems(ai.BatchApplyTask(ai.Capability{}, noopHandler, applyEffects(), applyManage())); len(probs) == 0 {
 		t.Error("a zero handle produced a registrable task")
 	}
 	// The apply kind belongs to the router that registered it.
@@ -548,6 +549,16 @@ func TestBatch_ApplyRunUsesModuleEffects(t *testing.T) {
 	}
 	if !e.r.HasApplyKind(applyKind) || e.r.HasApplyKind("gotham.ai.batch-apply.other") {
 		t.Error("the catalog does not report exactly the registered apply kind")
+	}
+	// Perms.Manage is the module's own (owner ruling 2026-11-22): core states
+	// none for a kind in a module's namespace, and a module that states none is
+	// refused at registration, naming the kind.
+	if got := tasks.CommonOf(e.def).Perms.Manage.String(); got != applyManage().String() {
+		t.Errorf("Perms.Manage = %s, want the module's %s", got, applyManage())
+	}
+	probs := tasks.Problems(ai.BatchApplyTask(e.c, noopHandler, applyEffects(), rbac.Requirement{}))
+	if len(probs) != 1 || !strings.Contains(probs[0].Error(), applyKind) || !strings.Contains(probs[0].Error(), "Perms.Manage") {
+		t.Errorf("an apply task with no Manage: problems = %v, want exactly one naming %s and Perms.Manage", probs, applyKind)
 	}
 
 	id := e.submit(3)

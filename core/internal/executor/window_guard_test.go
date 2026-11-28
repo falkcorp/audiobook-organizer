@@ -25,7 +25,7 @@ const (
 func windowDefs() []tasks.Definition {
 	return []tasks.Definition{
 		taskDef(nightly, okBody, readOnly(nightly), func(c *tasks.Common) {
-			c.Perms = tasks.Permissions{Start: rbac.Need(manageKey)}
+			c.Perms = tasks.Permissions{Start: rbac.Need(manageKey), Manage: rbac.Need(manageKey)}
 			c.Priority = tasks.PrioritySystem
 		}),
 		taskDef("arkham.relocate", okBody),

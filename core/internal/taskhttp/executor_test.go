@@ -69,7 +69,7 @@ func bootStores(t *testing.T) (tasks.Stores, storage.Keyspace) {
 func nightlyDef() tasks.Definition {
 	return tasks.Task(kindNightly, tasks.TaskSpec[struct{}, struct{}]{
 		Title: "Nightly Batcave window", Effects: tasks.ReadOnly(tasks.Res("core", "window")),
-		Perms: tasks.Permissions{Start: rbac.Need(scopeManage)}, Priority: tasks.PrioritySystem, Resume: tasks.ResumeContinue, Run: func(*tasks.RC, struct{}) (struct{}, error) { return struct{}{}, nil }})
+		Perms: tasks.Permissions{Start: rbac.Need(scopeManage), Manage: rbac.Need(scopeManage)}, Priority: tasks.PrioritySystem, Resume: tasks.ResumeContinue, Run: func(*tasks.RC, struct{}) (struct{}, error) { return struct{}{}, nil }})
 }
 
 // realRig is a Server over a real executor.

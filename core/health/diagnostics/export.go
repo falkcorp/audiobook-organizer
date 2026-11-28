@@ -85,7 +85,7 @@ func ExportTask(b InterimExport) tasks.Definition {
 		Title:   "Export diagnostics",
 		Help:    "Writes a redacted diagnostics bundle into a zip, section by section, limited to what the person who asked may read.",
 		Effects: tasks.ReadOnly(),
-		Perms:   tasks.Permissions{Start: rbac.Need("core:system.manage")},
+		Perms:   tasks.Permissions{Start: rbac.Need("core:system.manage"), Manage: rbac.Need("core:tasks.manage")},
 		Resume:  tasks.ResumeDrop,
 		Timeout: ExportTimeout,
 		Run:     run,

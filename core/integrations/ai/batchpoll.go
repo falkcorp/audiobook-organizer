@@ -86,7 +86,7 @@ func BatchPollTask(b InterimPoll) tasks.Definition {
 		Title:    "Poll AI batch jobs",
 		Help:     "Advances provider batch jobs and stages the apply run of each job whose results are ready.",
 		Effects:  tasks.Writes(tasks.Res("core", "ai")),
-		Perms:    tasks.Permissions{Start: rbac.Need("core:integrations.manage")},
+		Perms:    tasks.Permissions{Start: rbac.Need("core:integrations.manage"), Manage: rbac.Need("core:tasks.manage")},
 		Resume:   tasks.ResumeFromZero,
 		Timeout:  BatchPollTimeout,
 		Schedule: tasks.ScheduleFromConfig(BatchPollScheduleKey).Live(),

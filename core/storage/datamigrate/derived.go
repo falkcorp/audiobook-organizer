@@ -21,6 +21,7 @@ type DerivedBuildSpec struct {
 	Title     string
 	Reads     []entity.Ref             // module resources the rebuild reads (Effects: ReadOnly over them)
 	PermStart string                   // the module permission that may start a rebuild by hand
+	Manage    rbac.Requirement         // required: who may cancel, discard, decide or approve a rebuild run (tasks.Permissions.Manage); the module's, never a default
 	Timeout   time.Duration            // 0 = 24h (library-scale, as Batch)
 	Run       func(rc *tasks.RC) error // its library-scale loops declare their tasks.Parallelism (R7)
 }
@@ -34,7 +35,7 @@ const DefaultDerivedBuildTimeout = 24 * time.Hour
 // Resume set to restart from scratch; Registrar.DerivedIndex takes it (06).
 //
 // Like every tasks constructor it never panics: a bad module or name, a
-// missing Title, Run or PermStart is one of tasks.Problems(def), which
+// missing Title, Run, PermStart or Manage is one of tasks.Problems(def), which
 // registration reports.
 //
 //tasklint:constructor modules call it and pass the result to Registrar.DerivedIndex (05-storage §5S.3.9); core builds no derived index
@@ -56,7 +57,7 @@ func DerivedBuildTask(module, name string, s DerivedBuildSpec) tasks.Definition 
 	return tasks.Task(tasks.Kind(module+".derived."+name+".build"), tasks.TaskSpec[struct{}, struct{}]{
 		Title:   s.Title,
 		Effects: tasks.ReadOnly(s.Reads...),
-		Perms:   tasks.Permissions{Start: start},
+		Perms:   tasks.Permissions{Start: start, Manage: s.Manage},
 		Resume:  tasks.ResumeFromZero,
 		Timeout: timeout,
 		Run:     run,

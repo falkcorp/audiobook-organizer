@@ -15,9 +15,23 @@ import (
 // rbac.Requirement (05-rbac §3.1; zero value invalid there, so "zero" below
 // means "field omitted, default applied by tasks").
 type Permissions struct {
-	Start   rbac.Requirement // required; own-namespace or core scopes only (05-rbac §4 R3 rule)
-	Cancel  rbac.Requirement // omitted = Start. The run's own actor may always cancel it.
-	Approve rbac.Requirement // required iff Approval != nil (always for Fixer)
+	Start rbac.Requirement // required; own-namespace or core scopes only (05-rbac §4 R3 rule)
+
+	// Manage is the standing right over this kind's existing runs, required of
+	// every kind (owner ruling 2026-11-22: HEAD gated every operations control
+	// route behind settings.manage, and a kind states its own equivalent). A
+	// caller must satisfy Manage AND the operation's own requirement to cancel
+	// or discard a run (Cancel, omitted = Start) or to decide or approve one
+	// (Approve, for decide omitted = Start). Neither the run's own actor nor a
+	// holder of core:tasks.manage alone passes without it. It must be a scoped
+	// requirement (rbac.AllOf, rbac.AnyOf or rbac.Need) of own-namespace or core
+	// scopes: Public and AnyAuthenticated would satisfy anyone, so a kind that
+	// names one is refused at registration, as a kind that names none is. It
+	// gates no start.
+	Manage rbac.Requirement
+
+	Cancel  rbac.Requirement // omitted = Start; ANDed with Manage (no run's-own-actor arm, owner ruling 2026-11-22)
+	Approve rbac.Requirement // required iff Approval != nil (always for Fixer); ANDed with Manage
 	View    rbac.Requirement // omitted = rbac.Need("core:tasks.view")
 
 	// StartableByViewers is a reviewed reason allowing Start to be satisfied by

@@ -184,6 +184,15 @@ func (k *Kernel) moduleTaskProblems(e *entry) []module.Problem {
 				bad(module.ProblemInvalidRegistration, "task kind %q starts under the view-class scope %q (Permissions.StartableByViewers is empty, SEC-9)", kind, p)
 			}
 		}
+		// Manage is checked in the same namespaces as Start (its own scopes or
+		// core's); it is not a start, so the view-class rule above does not apply
+		// (a settings.manage equivalent may hold a view scope such as
+		// core:system.view among its AllOf).
+		for _, p := range c.Perms.Manage.Permissions() {
+			if ns, _, _ := strings.Cut(string(p), ":"); ns != string(id) && ns != "core" {
+				bad(module.ProblemPermissionNamespace, "task kind %q is managed under %q, outside module %s's namespace and core's", kind, p, id)
+			}
+		}
 		for _, r := range c.Effects.ReadSet() {
 			if r.Module == string(id) && !slices.Contains(resources, r.Kind) {
 				bad(module.ProblemInvalidRegistration, "task kind %q reads resource kind %q, which module %s did not declare with Registrar.Resources", kind, r.Kind, id)

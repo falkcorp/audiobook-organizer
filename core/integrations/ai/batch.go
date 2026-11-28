@@ -475,12 +475,18 @@ func applyKindName(capabilityID string) string {
 // core.ai.batch_max_apply_attempts; a run whose job is terminal ends without
 // applying anything.
 //
+// manage is the module's own Perms.Manage for the apply kind (who may cancel,
+// discard, decide or approve its runs, ANDed with the operation's requirement;
+// owner ruling 2026-11-22). The kind is the module's, so the requirement is the
+// module's to state, never a core default that would let a core scope control a
+// module's run. A zero manage is a tasks.Problems entry like a nil h.
+//
 // A zero or foreign handle, or a nil h, yields a definition whose Run is nil,
 // which tasks.Problems reports ("Task has no Run"), so registration fails
 // closed.
 //
 //tasklint:constructor the module passes the result to Registrar.Tasks in its Register; this package registers nothing
-func BatchApplyTask(c Capability, h BatchHandler, effects tasks.Effects) tasks.Definition {
+func BatchApplyTask(c Capability, h BatchHandler, effects tasks.Effects, manage rbac.Requirement) tasks.Definition {
 	kind := tasks.Kind("core.ai.batch-apply.unregistered")
 	var run func(rc *tasks.RC, p BatchApplyParams) (BatchApplyResult, error)
 	if c.r != nil && c.id != "" && c.r.HasCapability(c.id) {
@@ -496,7 +502,7 @@ func BatchApplyTask(c Capability, h BatchHandler, effects tasks.Effects) tasks.D
 		Title:   "Apply AI batch results",
 		Help:    "Applies the finished provider batch of one job through the module's handler and marks the job completed.",
 		Effects: effects,
-		Perms:   tasks.Permissions{Start: rbac.Need("core:integrations.manage")},
+		Perms:   tasks.Permissions{Start: rbac.Need("core:integrations.manage"), Manage: manage},
 		Resume:  tasks.ResumeFromZero,
 		Timeout: applyTimeout(),
 		// A poll that finds the job still Applying stages another run; a

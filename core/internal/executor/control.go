@@ -169,8 +169,9 @@ func (e *executor) UnpauseAs(by tasks.Actor) error {
 	return nil
 }
 
-// Cancel implements tasks.Client.Cancel: the run's own actor, Perms.Cancel
-// (omitted: Perms.Start) or core:tasks.manage.
+// Cancel implements tasks.Client.Cancel: the kind's Perms.Manage AND its
+// Perms.Cancel (omitted: Perms.Start), through mayControl. Neither the run's
+// own actor nor core:tasks.manage alone is enough (owner ruling 2026-11-22).
 func (e *executor) Cancel(ctx context.Context, id tasks.RunID) error {
 	actor, who := e.caller(ctx)
 	if who != nil {
@@ -178,29 +179,52 @@ func (e *executor) Cancel(ctx context.Context, id tasks.RunID) error {
 		if err != nil {
 			return err
 		}
-		if !e.mayCancel(rec, actor, who) {
+		if !e.mayCancel(rec, who) {
 			return fmt.Errorf("%w: cancel %s", ErrNotPermitted, id)
 		}
 	}
 	return e.CancelAs(ctx, id, actor)
 }
 
-func (e *executor) mayCancel(rec tasks.RunRecord, actor tasks.Actor, who rbac.Checker) bool {
-	if actor != (tasks.Actor{}) && actor == rec.Actor {
-		return true
+// mayControl is the one gate of cancel, discard, decide and approve for a
+// caller with a checker (owner ruling 2026-11-22): the kind's Perms.Manage AND
+// the operation's own requirement req, which each operation resolves for itself
+// (cancelRequirement, decideRequirement, or Perms.Approve alone for approve).
+// It fails closed on a kind with no definition, on a zero Manage (registration
+// refuses one, so this is the second line) and on a zero req. The four
+// operations share it so that none can drift from the others.
+func mayControl(who rbac.Checker, d *def, req rbac.Requirement) bool {
+	if d == nil || d.c.Perms.Manage.IsZero() || req.IsZero() {
+		return false
 	}
-	if who.Has(scopeTasksManage) {
-		return true
+	return who.Satisfies(d.c.Perms.Manage) && who.Satisfies(req)
+}
+
+// cancelRequirement is the operation requirement of cancel and discard:
+// Perms.Cancel, omitted Perms.Start.
+func cancelRequirement(p tasks.Permissions) rbac.Requirement {
+	if p.Cancel.IsZero() {
+		return p.Start
 	}
+	return p.Cancel
+}
+
+// decideRequirement is the operation requirement of decide: Perms.Approve,
+// omitted Perms.Start. Approve has no Start fallback.
+func decideRequirement(p tasks.Permissions) rbac.Requirement {
+	if p.Approve.IsZero() {
+		return p.Start
+	}
+	return p.Approve
+}
+
+// mayCancel is mayControl for cancel and discard of rec.
+func (e *executor) mayCancel(rec tasks.RunRecord, who rbac.Checker) bool {
 	d := e.defs[rec.Kind]
 	if d == nil {
 		return false
 	}
-	req := d.c.Perms.Cancel
-	if req.IsZero() {
-		req = d.c.Perms.Start
-	}
-	return who.Satisfies(req)
+	return mayControl(who, d, cancelRequirement(d.c.Perms))
 }
 
 // CancelAs cancels a run (5T.3.6). A run that is not executing in this
@@ -307,8 +331,9 @@ func (e *executor) attemptFor(cur tasks.RunRecord) *attempt {
 
 var errAlreadyStopping = errors.New("executor: run is already stopping")
 
-// Decide implements tasks.Client.Decide: Perms.Approve if set, else
-// Perms.Start (the verified-method half is the HTTP route's, F2-05). As
+// Decide implements tasks.Client.Decide: the kind's Perms.Manage AND its
+// Perms.Approve if set, else Perms.Start, through mayControl (the
+// verified-method half is the HTTP route's, F2-05). As
 // with Approve, a call with no caller identity (no Principal, or a context
 // it resolves to no one) is refused: a decision is always a person's.
 // Kernel-internal callers that carry the actor themselves use DecideAs.
@@ -328,11 +353,7 @@ func (e *executor) Decide(ctx context.Context, id tasks.RunID, d tasks.Decision)
 	if who == nil {
 		return fmt.Errorf("%w: decide %s: no caller identity", ErrNotPermitted, id)
 	}
-	req := def.c.Perms.Approve
-	if req.IsZero() {
-		req = def.c.Perms.Start
-	}
-	if !who.Satisfies(req) {
+	if !mayControl(who, def, decideRequirement(def.c.Perms)) {
 		return fmt.Errorf("%w: decide %s", ErrNotPermitted, id)
 	}
 	return e.DecideAs(ctx, id, d, actor)
@@ -408,8 +429,9 @@ func (e *executor) DecideAs(ctx context.Context, id tasks.RunID, d tasks.Decisio
 // plan, which must be a succeeded Preview run within MaxPlanAge.
 //
 // Approve and reject fail closed: they need a caller identity (a
-// Principal that resolves, with a checker) holding Perms.Approve, which
-// definition validation requires whenever Approval is set. A call with no
+// Principal that resolves, with a checker) holding the kind's Perms.Manage
+// AND its Perms.Approve (mayControl), which definition validation requires
+// whenever Approval is set. A call with no
 // identity is refused, never treated as kernel-internal. The apply run is
 // a start, so the approver also needs Perms.Start (permitStart).
 func (e *executor) Approve(ctx context.Context, id tasks.RunID, req tasks.ApproveRequest) error {
@@ -428,7 +450,7 @@ func (e *executor) Approve(ctx context.Context, id tasks.RunID, req tasks.Approv
 	if who == nil {
 		return fmt.Errorf("%w: approve %s: no caller identity", ErrNotPermitted, id)
 	}
-	if need := d.c.Perms.Approve; need.IsZero() || !who.Satisfies(need) {
+	if !mayControl(who, d, d.c.Perms.Approve) {
 		return fmt.Errorf("%w: approve %s", ErrNotPermitted, id)
 	}
 	if err := e.checkPlan(ctx, d, id); err != nil {
@@ -499,7 +521,8 @@ type approvalRecord struct {
 	Rows []string    `json:"rows"`
 }
 
-// Discard implements tasks.Client.Discard: Cancel's permission rule; a run
+// Discard implements tasks.Client.Discard: Cancel's permission rule (Manage
+// AND Cancel, mayCancel); a run
 // that is not terminal, or whose goroutine still lives here, is ErrRunActive.
 func (e *executor) Discard(ctx context.Context, id tasks.RunID) error {
 	rec, err := e.runs.Get(ctx, id)
@@ -509,7 +532,7 @@ func (e *executor) Discard(ctx context.Context, id tasks.RunID) error {
 	if e.held(rec.Kind) {
 		return fmt.Errorf("%w: %s", ErrHeld, id)
 	}
-	if actor, who := e.caller(ctx); who != nil && !e.mayCancel(rec, actor, who) {
+	if _, who := e.caller(ctx); who != nil && !e.mayCancel(rec, who) {
 		return fmt.Errorf("%w: discard %s", ErrNotPermitted, id)
 	}
 	e.mu.Lock()

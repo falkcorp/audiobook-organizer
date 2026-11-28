@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/rbac"
 )
@@ -64,9 +65,7 @@ func AtomTable() []Atom {
 		atomRow("scan.trigger", "books:scan"),
 		atomRow("integrations.manage", "core:integrations.manage", "books:integrations.manage"),
 		usersManage,
-		atomRow("settings.manage", "core:settings.manage", "books:settings.manage", "core:tasks.manage",
-			"core:system.view", "core:system.manage", "core:library.manage", "core:library.browse",
-			"core:integrations.manage"),
+		atomRow("settings.manage", taskmanage.Scopes()...), // the one list books' task Manage shares (F5-18 M1)
 		playlists,
 		atomRow("collections.manage", "books:collections.manage"),
 		atomRow("requests.create", "books:request"),

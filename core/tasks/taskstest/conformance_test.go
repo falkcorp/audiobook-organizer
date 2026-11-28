@@ -41,7 +41,7 @@ func common() tasks.Common {
 		Title:   "Catalogue Arkham inmates",
 		Help:    "Counts the inmates. Read-only.",
 		Effects: tasks.ReadOnly(tasks.Res("arkham", "inmates")),
-		Perms:   tasks.Permissions{Start: rbac.Need("arkham:inmates.view")},
+		Perms:   tasks.Permissions{Start: rbac.Need("arkham:inmates.view"), Manage: rbac.Need("arkham:inmates.admin")},
 		Resume:  tasks.ResumeFromZero,
 	}
 }

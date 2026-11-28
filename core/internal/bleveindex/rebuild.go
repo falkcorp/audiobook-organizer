@@ -54,7 +54,7 @@ func (e *Engine) RebuildTask() tasks.Definition {
 		Title:   "Rebuild a full-text index",
 		Help:    "Drops a module's full-text index and rebuilds it from the module's storage. Search falls back while it runs.",
 		Effects: tasks.Writes(tasks.Res("core", "index")),
-		Perms:   tasks.Permissions{Start: rbac.Need("core:system.manage")},
+		Perms:   tasks.Permissions{Start: rbac.Need("core:system.manage"), Manage: rbac.Need("core:tasks.manage")},
 		Resume:  tasks.ResumeFromZero,
 		Timeout: 24 * time.Hour,
 		Run:     e.Rebuild,

@@ -29,6 +29,7 @@ import (
 	"github.com/falkcorp/mediacore/internal/instancestore"
 	"github.com/falkcorp/mediacore/internal/statefs"
 	"github.com/falkcorp/mediacore/metrics"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/tasks"
@@ -556,12 +557,16 @@ func noopHandler(_ *tasks.RC, _ ai.BatchJob, results iter.Seq2[ai.BatchResult, e
 // applyEffects is the effect set a Batman module declares for its apply task.
 func applyEffects() tasks.Effects { return tasks.Writes(tasks.Res("gotham", "riddles")) }
 
+// applyManage is the Perms.Manage a Batman module states for its apply task:
+// the module's, never a core default.
+func applyManage() rbac.Requirement { return rbac.Need("gotham:riddles.admin") }
+
 // registerApply registers the apply task of c with h (which records the apply
 // kind on the router, as the module's Register does) and returns the
 // definition.
 func registerApply(t testing.TB, c ai.Capability, h handler) tasks.Definition {
 	t.Helper()
-	def := ai.BatchApplyTask(c, h, applyEffects())
+	def := ai.BatchApplyTask(c, h, applyEffects(), applyManage())
 	if def == nil {
 		t.Fatal("BatchApplyTask returned nil")
 	}
