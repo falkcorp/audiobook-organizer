@@ -345,7 +345,9 @@ func TestAwait_TicksStopWhenAwaitReturns(t *testing.T) {
 // TestAwait_CanceledParentReturnsTheCancelAndStopsWaiting: Cancel on a
 // parent blocked in Await ends the wait with the cancel cause, leaves the
 // parent canceled by that cancel (not by the watchdog), and leaks nothing.
-// The child belongs to its own lifecycle and is canceled separately.
+// The wait needs no call of its own to end promptly: it returns on the
+// parent's context. The child is canceled with its parent (F5-18 C6,
+// cascade.go), not left to its own lifecycle.
 func TestAwait_CanceledParentReturnsTheCancelAndStopsWaiting(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h, got := awaitRig(t, time.Minute, silentChild(time.Hour), nil)
@@ -377,8 +379,8 @@ func TestAwait_CanceledParentReturnsTheCancelAndStopsWaiting(t *testing.T) {
 		if r := h.get(parent); r.State != tasks.StateCanceled || r.Reason != reasonCancel {
 			t.Errorf("parent %s/%q, want canceled/cancel", r.State, r.Reason)
 		}
-		if err := h.x.Cancel(context.Background(), saw.child); err != nil {
-			t.Fatal(err)
+		if r := h.get(saw.child); r.State != tasks.StateCanceled || r.Reason != reasonCancel {
+			t.Errorf("child %s/%q, want canceled/cancel: the parent's cancel takes it down", r.State, r.Reason)
 		}
 		time.Sleep(5 * time.Second)
 		settleGoroutines(t, base)

@@ -17,6 +17,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2/vfs"
 
+	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/internal/executor"
 	"github.com/falkcorp/mediacore/internal/taskstore"
 	"github.com/falkcorp/mediacore/rbac"
@@ -75,16 +76,22 @@ func nightlyDef() tasks.Definition {
 // realRig is a Server over a real executor.
 func realRig(t *testing.T) *rig {
 	t.Helper()
+	return realRigWith(t, append(defs(), nightlyDef()))
+}
+
+// realRigWith is realRig over the given definitions, with extra scopes the
+// fixtures declare in the catalog.
+func realRigWith(t *testing.T, all []tasks.Definition, extra ...rbac.Permission) *rig {
+	t.Helper()
 	stores, ks := bootStores(t)
 	specs := rbac.CoreScopes()
-	for _, p := range []rbac.Permission{scopeRun, scopeSee, scopeApprove} {
+	for _, p := range append([]rbac.Permission{scopeRun, scopeSee, scopeApprove}, extra...) {
 		specs = append(specs, rbac.PermissionSpec{Name: p, Title: string(p), Description: "Fixture scope " + string(p)})
 	}
 	cat, err := rbac.NewCatalog(specs...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	all := append(defs(), nightlyDef())
 	x, err := executor.New(executor.Options{
 		Stores: stores, Keyspace: &ks, Definitions: all, Catalog: cat, InstrumentsOff: true,
 		Principal:     Principal,
@@ -183,5 +190,177 @@ func TestExecutor_ViewGateThroughHTTP(t *testing.T) {
 	}
 	if got := get(scopeSee); got != http.StatusOK {
 		t.Fatalf("a viewer = %d, want 200", got)
+	}
+}
+
+const (
+	scopeVault   = rbac.Permission("batcave:vault")
+	scopeViewAll = rbac.Permission("core:tasks.view")
+)
+
+// patrolTree starts batcave.patrol as bruce (a signed-in session) over the real
+// executor and returns once it, the yard and the vault it enqueued are running. The
+// patrol and the yard are cancelable by anyone who holds batcave:run; the vault's
+// Perms.Cancel is batcave:vault.
+func patrolTree(t *testing.T) (g *rig, patrolID, vaultID string) {
+	t.Helper()
+	started := make(chan tasks.RunID, 4)
+	leaf := func(kind tasks.Kind, edit func(*tasks.Permissions)) tasks.Definition {
+		perms := tasks.Permissions{Start: rbac.Need(scopeRun)}
+		if edit != nil {
+			edit(&perms)
+		}
+		return tasks.Task(kind, tasks.TaskSpec[struct{}, struct{}]{
+			Title: "Hold the " + string(kind), Effects: tasks.Writes(tasks.Res("batcave", string(kind))),
+			Perms: perms, Resume: tasks.ResumeContinue, Cancel: tasks.Cooperative(time.Second),
+			Run: func(rc *tasks.RC, _ struct{}) (struct{}, error) {
+				started <- rc.RunID()
+				<-rc.Context().Done()
+				return struct{}{}, context.Cause(rc.Context())
+			}})
+	}
+	patrol := tasks.Task("batcave.patrol", tasks.TaskSpec[struct{}, struct{}]{
+		Title: "Patrol the Batcave", Effects: tasks.Writes(tasks.Res("batcave", "patrol")),
+		Perms: tasks.Permissions{Start: rbac.Need(scopeRun)}, Resume: tasks.ResumeContinue, Cancel: tasks.Cooperative(time.Second),
+		Run: func(rc *tasks.RC, _ struct{}) (struct{}, error) {
+			for _, k := range []tasks.Kind{"batcave.yard", "batcave.vault"} {
+				if _, err := rc.Enqueue(k, struct{}{}); err != nil {
+					return struct{}{}, err
+				}
+			}
+			started <- rc.RunID()
+			<-rc.Context().Done()
+			return struct{}{}, context.Cause(rc.Context())
+		}})
+	all := []tasks.Definition{patrol, leaf("batcave.yard", nil),
+		leaf("batcave.vault", func(p *tasks.Permissions) { p.Cancel = rbac.Need(scopeVault) })}
+	g = realRigWith(t, all, scopeVault)
+	rs := g.do(req{method: "POST", path: "/definitions/batcave.patrol/runs", body: `{"mode": "live"}`, as: session("bruce", scopeRun, scopeSee)})
+	var pv runDTO
+	decodeAsync(t, rs, &pv)
+	for range 3 {
+		<-started
+	}
+	var kids struct {
+		Runs []runDTO `json:"runs"`
+	}
+	decode(t, g.do(req{method: "GET", path: "/runs?parent=" + pv.ID, as: session("bruce", scopeRun, scopeSee, scopeViewAll)}), &kids)
+	for _, k := range kids.Runs {
+		if k.Kind == "batcave.vault" {
+			vaultID = k.ID
+		}
+	}
+	if vaultID == "" {
+		t.Fatalf("no vault among the patrol's children: %+v", kids.Runs)
+	}
+	return g, pv.ID, vaultID
+}
+
+// cancelOf is the cancel request for run id as by.
+func cancelOf(id string, by *auth.Principal) req {
+	return req{method: "POST", path: "/runs/" + id + "/cancel", as: by}
+}
+
+// TestExecutor_CancelSkipsAreAuditedThroughHTTP (F5-18 C6, the cancel authority
+// ruling): lucius may cancel the patrol and the yard it enqueued but not the
+// vault (its Perms.Cancel is batcave:vault and lucius did not start it). The
+// route answers 200, the vault keeps running, and the core.task.cancel record
+// names the skipped run. A holder of the vault's scope skips nothing, and its
+// record has no skipped list.
+func TestExecutor_CancelSkipsAreAuditedThroughHTTP(t *testing.T) {
+	t.Run("a caller who may not cancel the vault", func(t *testing.T) {
+		g, patrolID, vaultID := patrolTree(t)
+		lucius := session("lucius", scopeRun, scopeSee, scopeViewAll)
+		if rec := g.do(cancelOf(patrolID, lucius)); rec.Code != http.StatusOK {
+			t.Fatalf("cancel = %d\n%s", rec.Code, rec.Body.String())
+		}
+		if len(g.aud.recorded) != 1 {
+			t.Fatalf("recorded = %+v", g.aud.recorded)
+		}
+		e := g.aud.recorded[0]
+		skipped, _ := e.Details["skipped"].([]string)
+		if e.Action != "core.task.cancel" || string(e.Target.ID) != patrolID || len(skipped) != 1 || skipped[0] != vaultID {
+			t.Fatalf("record = %+v, want core.task.cancel of %s with skipped [%s]", e, patrolID, vaultID)
+		}
+		var v runDTO
+		decode(t, g.do(req{method: "GET", path: "/runs/" + vaultID, as: lucius}), &v)
+		if v.State != string(tasks.StateRunning) {
+			t.Fatalf("the vault is %s, want running", v.State)
+		}
+	})
+	t.Run("a caller who may", func(t *testing.T) {
+		g, patrolID, _ := patrolTree(t)
+		if rec := g.do(cancelOf(patrolID, session("lucius", scopeRun, scopeSee, scopeVault, scopeViewAll))); rec.Code != http.StatusOK {
+			t.Fatalf("cancel = %d\n%s", rec.Code, rec.Body.String())
+		}
+		if len(g.aud.recorded) != 1 {
+			t.Fatalf("recorded = %+v", g.aud.recorded)
+		}
+		if _, has := g.aud.recorded[0].Details["skipped"]; has {
+			t.Fatalf("a cancel that skipped nothing lists skipped runs: %+v", g.aud.recorded[0].Details)
+		}
+	})
+}
+
+// TestExecutor_CancelAuditFollowsTheExecutorsActorRule (S2): the route audits a cancel
+// unless the caller is the run's own actor by the rule the executor applies to the
+// cancel permission: the whole stamped Actor, user and credential class. Bruce
+// signed in with a session when he started the patrol; the same user with an API key
+// is another actor to the executor (no owner's reach over the descendants), and the
+// same user in a session is the owner.
+func TestExecutor_CancelAuditFollowsTheExecutorsActorRule(t *testing.T) {
+	t.Run("the same user over an API key, who skips the vault", func(t *testing.T) {
+		g, patrolID, vaultID := patrolTree(t)
+		key := who("bruce", auth.MethodAPIKey, scopeRun, scopeSee, scopeViewAll)
+		if rec := g.do(cancelOf(patrolID, key)); rec.Code != http.StatusOK {
+			t.Fatalf("cancel = %d\n%s", rec.Code, rec.Body.String())
+		}
+		if len(g.aud.recorded) != 1 {
+			t.Fatalf("the vault was skipped but the records are %+v, want one core.task.cancel", g.aud.recorded)
+		}
+		if skipped, _ := g.aud.recorded[0].Details["skipped"].([]string); len(skipped) != 1 || skipped[0] != vaultID {
+			t.Fatalf("record = %+v, want skipped [%s]", g.aud.recorded[0], vaultID)
+		}
+	})
+	t.Run("the same user over an API key, who skips nothing", func(t *testing.T) {
+		g, patrolID, _ := patrolTree(t)
+		key := who("bruce", auth.MethodAPIKey, scopeRun, scopeSee, scopeVault, scopeViewAll)
+		if rec := g.do(cancelOf(patrolID, key)); rec.Code != http.StatusOK {
+			t.Fatalf("cancel = %d\n%s", rec.Code, rec.Body.String())
+		}
+		if len(g.aud.recorded) != 1 {
+			t.Fatalf("records = %+v, want one core.task.cancel: a key is not the session that started the run", g.aud.recorded)
+		}
+	})
+	t.Run("the same user in a session is the owner and is not audited", func(t *testing.T) {
+		g, patrolID, _ := patrolTree(t)
+		if rec := g.do(cancelOf(patrolID, session("bruce", scopeRun, scopeSee, scopeViewAll))); rec.Code != http.StatusOK {
+			t.Fatalf("cancel = %d\n%s", rec.Code, rec.Body.String())
+		}
+		if len(g.aud.recorded) != 0 {
+			t.Fatalf("records = %+v, want none for the run's own actor", g.aud.recorded)
+		}
+	})
+}
+
+// TestExecutor_ARepeatCancelThatSkippedAgainIsAudited (S2): lucius cancels twice. The
+// second finds the patrol already canceled and answers 404 (HEAD's repeat-cancel
+// rule), but it ran the cascade again and left the vault running again: the action
+// has an audit record of its own, with the skipped list.
+func TestExecutor_ARepeatCancelThatSkippedAgainIsAudited(t *testing.T) {
+	g, patrolID, vaultID := patrolTree(t)
+	lucius := session("lucius", scopeRun, scopeSee, scopeViewAll)
+	if rec := g.do(cancelOf(patrolID, lucius)); rec.Code != http.StatusOK {
+		t.Fatalf("first cancel = %d\n%s", rec.Code, rec.Body.String())
+	}
+	rec := g.do(cancelOf(patrolID, lucius))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("repeat cancel = %d, want 404 (the run is already canceled)\n%s", rec.Code, rec.Body.String())
+	}
+	if len(g.aud.recorded) != 2 {
+		t.Fatalf("records = %+v, want one per cancel that acted", g.aud.recorded)
+	}
+	if skipped, _ := g.aud.recorded[1].Details["skipped"].([]string); len(skipped) != 1 || skipped[0] != vaultID {
+		t.Fatalf("the repeat's record = %+v, want skipped [%s]", g.aud.recorded[1], vaultID)
 	}
 }

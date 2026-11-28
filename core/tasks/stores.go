@@ -50,7 +50,30 @@ type RunRecord struct {
 	// rest of the record (codec.JSON, version 1): a row written before the
 	// field existed decodes with it false.
 	FinishOnly bool
-	Seq        RunSeqs // per-run numbering of events, intents and log lines (DATA-19)
+	// CancelReach is the verdict of the cancel that ended or is ending this run:
+	// which of the runs it enqueued the cancel's caller may take down with it
+	// (F5-18 C6). Written by the executor in the same move as the cancel, and
+	// copied onto each descendant the cascade ends, so the dispatch guard and the
+	// boot pass, which have no caller, judge a late or orphaned child by the
+	// original caller's authority. nil: no cancel recorded one (a run that was
+	// never canceled, or a row written before the field existed, which decodes nil
+	// with no migration; codec.JSON, version 1) and nothing cascades from it
+	// without a live caller to ask.
+	CancelReach *CancelReach
+	Seq         RunSeqs // per-run numbering of events, intents and log lines (DATA-19)
+}
+
+// CancelReach is which runs a cancel may take down with the run it canceled: the
+// descendants of the kinds in Kinds, or of every kind when All (a kernel-internal
+// cancel, which no caller's checker limits), and only those whose Actor is Actor,
+// the canceled run's own (a child inherits it, so a descendant with another one
+// was not enqueued by the run). Kinds is the set of registered kinds the caller
+// could cancel when it canceled, sorted. A kind not in it, including one
+// registered later, is out of reach.
+type CancelReach struct {
+	All   bool
+	Kinds []Kind
+	Actor Actor
 }
 
 // RunSeqs is a run's per-page sequence counters.

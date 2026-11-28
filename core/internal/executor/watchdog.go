@@ -74,7 +74,7 @@ func (e *executor) watchOnce(ctx context.Context) {
 		}
 		a.strike(ctx, kind, fmt.Sprintf("silent for %s (progress timeout %s)", gap.Round(time.Second), a.d.progTO))
 		a.log.Warn("watchdog stops a silent run", "strike", kind, "silent", gap.Round(time.Second))
-		if err := e.stop(ctx, a.id, watchdogActor(), reasonWatchdog, tasks.ErrCanceled); err != nil {
+		if err := e.stop(ctx, a.id, watchdogActor(), nil, reasonWatchdog, tasks.ErrCanceled); err != nil {
 			a.log.Warn("watchdog stop failed", "err", err)
 		}
 	}

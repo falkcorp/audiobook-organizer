@@ -13,6 +13,7 @@ import (
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/entity"
+	"github.com/falkcorp/mediacore/internal/executor"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -90,10 +91,15 @@ func routePattern(r *http.Request) string {
 	return p
 }
 
-// sameActor reports whether a run was started by the caller: the same
-// signed-in user.
+// sameActor reports whether a run was started by the caller, by the rule the
+// executor's cancel permission applies (mayCancel's first arm): the caller's whole
+// stamped Actor, user and credential class, equals the run's. The same user over
+// an API key after a session start is another actor to the executor (it gets no
+// owner's reach over the run's descendants), so it is another actor here too, and
+// its cancel is audited.
 func sameActor(p *auth.Principal, v tasks.RunView) bool {
-	return p.User != nil && v.Actor.UserID != "" && v.Actor.UserID == string(p.User.ID)
+	a := actorOf(p)
+	return a != (tasks.Actor{}) && a == v.Actor
 }
 
 // cancelRun: POST /runs/{id}/cancel. The permission (the run's actor, the
@@ -109,12 +115,32 @@ func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request, p *auth.Princ
 		s.fail(w, r, viewErr)
 		return
 	}
-	if err := s.d.Client.Cancel(r.Context(), id); err != nil {
-		s.fail(w, r, err)
+	// A cancel also takes down the runs the run enqueued, but only those the
+	// caller may cancel (F5-18 C6). The ones it left running are listed by the
+	// report and named in the audit record, whoever the caller is: a run the
+	// caller may not cancel can hang from a run it owns (a child that carries
+	// another actor), so skipping one is not limited to a stranger's cancel.
+	ctx, report := executor.WithCancelReport(r.Context())
+	cancelErr := s.d.Client.Cancel(ctx, id)
+	// The error is the executor's answer, but the action may have been taken
+	// before it: the run's own stop committed and a later step failed (a child
+	// that could not be stopped, a repeat cancel finishing a cascade). A cancel
+	// that changed nothing has nothing to audit and fails as before; one that
+	// changed something is audited first and then fails.
+	if cancelErr != nil && !report.Acted() {
+		s.fail(w, r, cancelErr)
 		return
 	}
-	if viewErr != nil || !sameActor(p, before) {
+	skipped := report.Skipped()
+	if viewErr != nil || !sameActor(p, before) || len(skipped) > 0 {
 		details := map[string]any{}
+		if len(skipped) > 0 {
+			ids := make([]string, len(skipped))
+			for i, id := range skipped {
+				ids[i] = string(id)
+			}
+			details["skipped"] = ids
+		}
 		if viewErr == nil {
 			details["kind"] = string(before.Kind)
 			// A system run is named in its own field rather than as a
@@ -128,6 +154,10 @@ func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request, p *auth.Princ
 		if !s.record(w, r, p, actionCancel, id, details) {
 			return
 		}
+	}
+	if cancelErr != nil {
+		s.fail(w, r, cancelErr)
+		return
 	}
 	s.respondRun(w, r, p, id)
 }
