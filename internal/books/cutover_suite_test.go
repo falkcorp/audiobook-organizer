@@ -13,13 +13,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash"
 	"io/fs"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -31,6 +32,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -200,6 +202,11 @@ type cutoverStep struct {
 	Kind     stepKind
 	Source   []keyRange
 	Residual [][]byte
+	// residual is Residual as a set (string(key)), filled beside it by
+	// registeredCutoverSteps, so inSource's exact-match test is one lookup per
+	// key: the store scan asks it of every key of every step, and a list walk
+	// made that O(keys x residual).
+	residual map[string]struct{}
 	// Version and Level are a level step's books version and the level its
 	// stamp batch raises books to.
 	Version, Level int
@@ -237,10 +244,8 @@ func fromVerifyReport(v datamigrate.VerifyReport) stepReport {
 // inSource reports whether key lies in the step's Source and is not one of
 // its Residual keys (a Residual key is rewritten in place, not drained).
 func (s cutoverStep) inSource(key []byte) bool {
-	for _, r := range s.Residual {
-		if bytes.Equal(r, key) {
-			return false
-		}
+	if _, ok := s.residual[string(key)]; ok {
+		return false
 	}
 	for _, r := range s.Source {
 		if r.contains(key) {
@@ -361,6 +366,10 @@ func manifestSteps(man module.Manifest) ([]cutoverStep, error) {
 		}
 		for _, k := range d.Residual {
 			st.Residual = append(st.Residual, bytes.Clone(k))
+			if st.residual == nil {
+				st.residual = map[string]struct{}{}
+			}
+			st.residual[string(k)] = struct{}{}
 		}
 		if len(st.Source) == 0 {
 			return nil, fmt.Errorf("cutover step %s declares no Source", d.ID)
@@ -935,31 +944,35 @@ func checkpoints(t *testing.T, work string) []string {
 
 // ---------------------------------------------------------------- scanning a store
 
-// familyDigest is one family's count and SHA-256 over its keys and values,
-// in key order, of the keys no exclusion covers.
+// familyDigest is one family's count and SHA-256, in key order, over the
+// SHA-256 of each of its keys with its value, of the keys no exclusion covers.
+// Each row's sum is kept (sums, 32 bytes a row) rather than streamed into one
+// hash, so the digest of a store scanned in key-range shards is the shards'
+// sums joined in key order (mergeScans), whatever the shard boundaries: a
+// scan's digests are compared only with another scan's (byteProblems).
 type familyDigest struct {
 	Keys int64
-	h    hash.Hash
+	sums []byte
 }
 
 func (d *familyDigest) add(k, v []byte) {
-	if d.h == nil {
-		d.h = sha256.New()
-	}
+	h := sha256.New()
 	var n [8]byte
 	for _, b := range [][]byte{k, v} {
 		binary.LittleEndian.PutUint64(n[:], uint64(len(b)))
-		_, _ = d.h.Write(n[:])
-		_, _ = d.h.Write(b)
+		_, _ = h.Write(n[:])
+		_, _ = h.Write(b)
 	}
+	d.sums = h.Sum(d.sums)
 	d.Keys++
 }
 
 func (d *familyDigest) digest() string {
-	if d.h == nil {
+	if d.Keys == 0 {
 		return ""
 	}
-	return hex.EncodeToString(d.h.Sum(nil))
+	sum := sha256.Sum256(d.sums)
+	return hex.EncodeToString(sum[:])
 }
 
 // quarantineRecord is the part of a storage.QuarantineRecord (05-storage
@@ -1057,21 +1070,140 @@ func (fi familyIndex) family(key []byte) string {
 
 func coreFamily(f string) bool { return f == "c/" || f == "m/" }
 
-// scanStore reads every key of the Pebble store at dir, read-only.
+// scanStore reads every key of the Pebble store at dir, read-only, one
+// storeScan per shard (shardedRead), merged in key order (mergeScans): every
+// shard owns its storeScan, so the workers share nothing they write. A
+// production-shaped store (F2-14) is tens of millions of keys, and one
+// goroutine scanning it twice did not finish inside the suite's timeout.
 func scanStore(t *testing.T, dir string, spec scanSpec) *storeScan {
+	t.Helper()
+	start := time.Now()
+	var shards []*storeScan
+	fi := newFamilyIndex()
+	shardedRead(t, dir, func(n int) { shards = make([]*storeScan, n) }, func(i int, it *pebble.Iterator) error {
+		s := newStoreScan(spec)
+		for it.First(); it.Valid(); it.Next() {
+			s.add(fi, spec, it.Key(), it.Value())
+		}
+		shards[i] = s
+		return nil
+	})
+	s := mergeScans(spec, shards)
+	t.Logf("scanned %s: %d keys in %d shards, %s", filepath.Base(filepath.Dir(filepath.Dir(dir))), s.Total, len(shards), time.Since(start).Round(time.Millisecond))
+	return s
+}
+
+// shardedRead opens the Pebble store at dir read-only, cuts its key space
+// into contiguous ranges at table boundaries (scanShardBounds, up to
+// 4 x NumCPU), calls alloc once with the number of ranges, then calls visit
+// for every range, on a worker pool of runtime.NumCPU(), with an iterator
+// bounded to it. Range i holds keys below range i+1's, so a caller that keeps
+// a result per range and joins them in index order sees the store in key
+// order. visit must write only its own range's result.
+func shardedRead(t *testing.T, dir string, alloc func(n int), visit func(i int, it *pebble.Iterator) error) {
 	t.Helper()
 	db, err := pebble.Open(dir, &pebble.Options{ReadOnly: true})
 	require.NoError(t, err, "open %s read-only", dir)
 	defer func() { require.NoError(t, db.Close()) }()
-	it, err := db.NewIter(nil)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, it.Close()) }()
-	s := newStoreScan(spec)
-	fi := newFamilyIndex()
-	for it.First(); it.Valid(); it.Next() {
-		s.add(fi, spec, it.Key(), it.Value())
+	bounds, err := scanShardBounds(db, 4*runtime.NumCPU())
+	require.NoError(t, err, "list %s's tables", dir)
+	alloc(len(bounds) + 1)
+	var g errgroup.Group
+	g.SetLimit(runtime.NumCPU())
+	for i := range len(bounds) + 1 {
+		opts := &pebble.IterOptions{}
+		if i > 0 {
+			opts.LowerBound = bounds[i-1]
+		}
+		if i < len(bounds) {
+			opts.UpperBound = bounds[i]
+		}
+		g.Go(func() (err error) {
+			it, err := db.NewIter(opts)
+			if err != nil {
+				return err
+			}
+			defer func() { err = errors.Join(err, it.Close()) }()
+			if err := visit(i, it); err != nil {
+				return err
+			}
+			return it.Error()
+		})
 	}
-	return s
+	require.NoError(t, g.Wait(), "read %s", dir)
+}
+
+// scanShardBounds is up to n-1 split keys, ascending and distinct, at the
+// smallest user keys of the store's tables, evenly spaced over them. Any
+// split keys give the same merged scan; table boundaries only spread the
+// work. A store with fewer tables gets fewer shards (none: one shard).
+func scanShardBounds(db *pebble.DB, n int) ([][]byte, error) {
+	levels, err := db.SSTables()
+	if err != nil {
+		return nil, err
+	}
+	var starts [][]byte
+	for _, level := range levels {
+		for _, tbl := range level {
+			starts = append(starts, bytes.Clone(tbl.Smallest.UserKey))
+		}
+	}
+	slices.SortFunc(starts, bytes.Compare)
+	starts = slices.CompactFunc(starts, bytes.Equal)
+	if len(starts) > 0 && len(starts[0]) == 0 {
+		starts = starts[1:] // the empty key starts the first shard anyway
+	}
+	if len(starts) < n {
+		return starts, nil
+	}
+	out := make([][]byte, 0, n-1)
+	for i := 1; i < n; i++ {
+		out = append(out, starts[i*len(starts)/n])
+	}
+	return slices.CompactFunc(out, bytes.Equal), nil
+}
+
+// mergeScans joins shard scans of disjoint, ascending key ranges into the scan
+// one pass over the whole store would have made: counts add, sets and row maps
+// union (each key is in one shard), and the ordered parts (each family's row
+// sums, the quarantine records) are joined in shard order, which is key order.
+func mergeScans(spec scanSpec, shards []*storeScan) *storeScan {
+	out := newStoreScan(spec)
+	digests := func(dst, src map[string]*familyDigest) {
+		for fam, d := range src {
+			m := out.digestOf(dst, fam)
+			m.Keys += d.Keys
+			m.sums = append(m.sums, d.sums...)
+		}
+	}
+	for _, s := range shards {
+		out.Total += s.Total
+		digests(out.Families, s.Families)
+		digests(out.Plain, s.Plain)
+		for k, v := range s.InSource {
+			out.InSource[k] += v
+		}
+		for k, v := range s.Skipped {
+			out.Skipped[k] += v
+		}
+		for kind, ids := range s.IDs {
+			if out.IDs[kind] == nil {
+				out.IDs[kind] = map[string]bool{}
+			}
+			maps.Copy(out.IDs[kind], ids)
+		}
+		maps.Copy(out.Bookkeeping, s.Bookkeeping)
+		maps.Copy(out.coreTokens, s.coreTokens)
+		maps.Copy(out.quarantinedIDs, s.quarantinedIDs)
+		out.Quarantine = append(out.Quarantine, s.Quarantine...)
+		maps.Copy(out.storageRows, s.storageRows)
+		maps.Copy(out.coreIdentity, s.coreIdentity)
+		maps.Copy(out.identityRows, s.identityRows)
+		if out.rows != nil {
+			maps.Copy(out.rows, s.rows)
+		}
+	}
+	return out
 }
 
 // newStoreScan is an empty scan for spec, ready for add.
@@ -1457,6 +1589,9 @@ func referencedIDs(fam string, key, val []byte, ids map[string]string) []string 
 	return out
 }
 
+// refProblemCap is how many unresolved references refProblems lists.
+const refProblemCap = 50
+
 // refProblems: the referential pass (14 E2; 05-storage §5S.3.13), streamed
 // over the after-store at dir so it runs at production size too: every ID of
 // the before-store a books row of the after-store references
@@ -1470,31 +1605,45 @@ func refProblems(t *testing.T, dir string, steps []cutoverStep, before, after *s
 			ids[id] = kind
 		}
 	}
-	db, err := pebble.Open(dir, &pebble.Options{ReadOnly: true})
-	require.NoError(t, err, "open %s read-only", dir)
-	defer func() { require.NoError(t, db.Close()) }()
-	it, err := db.NewIter(nil)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, it.Close()) }()
-	var out []string
-	orphans := map[string]int64{}
+	// Each shard keeps its own first refProblemCap problems and its own orphan
+	// counts; ids and after are only read. Joined in shard (key) order and cut
+	// at refProblemCap, the list is the one a single pass would have kept.
+	type refShard struct {
+		out     []string
+		orphans map[string]int64
+	}
+	var shards []refShard
 	fi := newFamilyIndex()
-	for it.First(); it.Valid(); it.Next() {
-		fam := fi.family(it.Key())
-		if coreFamily(fam) {
-			continue
-		}
-		for _, id := range referencedIDs(fam, it.Key(), it.Value(), ids) {
-			kept, q := idResolves(ids[id], id, after)
-			switch {
-			case kept:
-			case q:
-				orphans[fam]++
-			case len(out) < 50:
-				out = append(out, fmt.Sprintf("%s references %s %s, which neither resolves nor is quarantined", it.Key(), ids[id], id))
+	shardedRead(t, dir, func(n int) { shards = make([]refShard, n) }, func(i int, it *pebble.Iterator) error {
+		sh := refShard{orphans: map[string]int64{}}
+		for it.First(); it.Valid(); it.Next() {
+			fam := fi.family(it.Key())
+			if coreFamily(fam) {
+				continue
+			}
+			for _, id := range referencedIDs(fam, it.Key(), it.Value(), ids) {
+				kept, q := idResolves(ids[id], id, after)
+				switch {
+				case kept:
+				case q:
+					sh.orphans[fam]++
+				case len(sh.out) < refProblemCap:
+					sh.out = append(sh.out, fmt.Sprintf("%s references %s %s, which neither resolves nor is quarantined", it.Key(), ids[id], id))
+				}
 			}
 		}
+		shards[i] = sh
+		return nil
+	})
+	var out []string
+	orphans := map[string]int64{}
+	for _, sh := range shards {
+		out = append(out, sh.out...)
+		for f, n := range sh.orphans {
+			orphans[f] += n
+		}
 	}
+	out = out[:min(len(out), refProblemCap)]
 	reported := map[string]int64{}
 	for _, st := range steps {
 		for f, n := range st.Report.OrphanedRefs {
