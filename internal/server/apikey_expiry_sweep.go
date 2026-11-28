@@ -45,7 +45,17 @@ const (
 //
 // This goroutine owns its state exclusively (no shared mutable state with
 // other goroutines beyond the store), so no mutex is needed.
+//
+// Under core identity it does not run at all: keys are core's records (M3
+// imported every key, M3 gave each an expiry), and books' k: rows it lists are
+// drained and their claim retired, so every tick would list nothing, or fail on
+// the retired claim, and warn about nothing. It returns at once, as
+// stampNeverExpiringAPIKeys and logLegacyBcryptPasswordCount are not run
+// (seedRolesAndTokens). Core owns key expiry warnings.
 func (s *Server) warnExpiringAPIKeys() {
+	if s.identity != nil {
+		return
+	}
 	store := s.Ops()
 	if store == nil {
 		return
