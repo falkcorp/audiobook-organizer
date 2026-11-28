@@ -26,7 +26,10 @@ type Client interface { //nolint:interfacebloat // spec-mandated SDK interface (
 	// ctx, as Start does (below), and apply the native route's permission rule to
 	// that actor (the table below: Cancel = the run's actor or Perms.Cancel;
 	// Decide = Approve/Start + verified method; Pause/Unpause =
-	// core:tasks.manage).
+	// core:tasks.manage). A cancel also cancels every unfinished run the run
+	// enqueued (RC.Enqueue), and theirs in turn: the permission is checked on the
+	// run named, not on each descendant, and a run's cancel never reaches a run
+	// that is not under it.
 	Cancel(ctx context.Context, id RunID) error
 	Decide(ctx context.Context, id RunID, d Decision) error // Resume | Finish | Drop
 	Pause(ctx context.Context, reason string) error
