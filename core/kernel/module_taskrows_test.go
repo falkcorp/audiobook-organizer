@@ -61,8 +61,8 @@ func newRowsFixture(t *testing.T) *rowsFixture {
 		if err != nil {
 			t.Fatalf("NewID: %v", err)
 		}
-		rec := tasks.RunRecord{RunView: tasks.RunView{ID: id, Kind: kind, Mode: tasks.ModeLive, State: tasks.StateQueued,
-			Actor: tasks.Actor{AuthMethod: "system", System: "core"}, Trigger: tasks.TriggerManual, Created: time.Now(), PlanRef: planRef},
+		rec := tasks.RunRecord{ID: id, Kind: kind, Mode: tasks.ModeLive, State: tasks.StateQueued,
+			Actor: tasks.Actor{AuthMethod: "system", System: "core"}, Trigger: tasks.TriggerManual, Created: time.Now(), PlanRef: planRef,
 			Priority: tasks.PriorityNormal, Params: json.RawMessage(`{}`)}
 		if err := k.commitTaskBatch(t.Context(), func(b *storage.Batch) error { return runs.Insert(t.Context(), b, rec) }); err != nil {
 			t.Fatalf("Insert %s: %v", kind, err)
@@ -249,7 +249,7 @@ func (s *listStub) List(context.Context, tasks.RunQuery) iter.Seq2[tasks.RunReco
 }
 
 func stubRun(id string, kind tasks.Kind) tasks.RunRecord {
-	return tasks.RunRecord{RunView: tasks.RunView{ID: tasks.RunID(id), Kind: kind}}
+	return tasks.RunRecord{ID: tasks.RunID(id), Kind: kind}
 }
 
 // A module that registered no kind lists nothing, and the store is not asked: an
