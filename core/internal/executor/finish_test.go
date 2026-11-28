@@ -603,9 +603,10 @@ func TestFinishOnly_RefusesAKindWithoutALedger(t *testing.T) {
 }
 
 // TestFinishOnly_KeepsTheDecidePermissionGate: Decide(finish) asks for the
-// kind's Perms.Approve else Perms.Start, as Decide(resume) and Decide(drop)
-// do (the gate is not this slice's to change): a caller without the scope is
-// refused and the run stays awaiting; one with it queues the finish.
+// kind's Perms.Manage AND its Perms.Approve else Perms.Start, as Decide(resume)
+// and Decide(drop) do (the gate is not this slice's to change): a caller without
+// the scopes is refused and the run stays awaiting; one with them queues the
+// finish.
 func TestFinishOnly_KeepsTheDecidePermissionGate(t *testing.T) {
 	second := &finishOnlyRig{summary: make(chan tasks.Summary, 2)}
 	edit := func(o *Options) {
@@ -619,7 +620,7 @@ func TestFinishOnly_KeepsTheDecidePermissionGate(t *testing.T) {
 	if r := h.get(id); r.State != tasks.StateAwaitingDecision || r.FinishOnly {
 		t.Fatalf("a refused decision left the run %s (finish-only %v)", r.State, r.FinishOnly)
 	}
-	if err := h.x.Decide(asUser("gordon", "gotham:run"), id, tasks.DecideFinish); err != nil {
+	if err := h.x.Decide(asUser("gordon", "gotham:run", "gotham:manage"), id, tasks.DecideFinish); err != nil {
 		t.Fatalf("decide finish with the scope: %v", err)
 	}
 	if r := h.waitState(id, tasks.StateSucceeded, tasks.StateFailed); r.State != tasks.StateSucceeded {
@@ -753,7 +754,7 @@ func interruptedApply(t *testing.T, blockRow string, next *finishFixer, opts ...
 	first := &finishFixer{blockRow: blockRow, reach: make(chan struct{})}
 	h := newHarness(t, []tasks.Definition{first.def()}, edit)
 	plan := h.plan()
-	if err := h.x.Approve(asUser("gordon", scopeApprov, scopeRun), plan, tasks.ApproveRequest{Rows: inmates}); err != nil {
+	if err := h.x.Approve(asUser("gordon", scopeApprov, scopeRun, scopeArkManage), plan, tasks.ApproveRequest{Rows: inmates}); err != nil {
 		t.Fatal(err)
 	}
 	<-first.reach

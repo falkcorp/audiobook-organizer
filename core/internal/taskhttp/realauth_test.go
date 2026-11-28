@@ -114,12 +114,17 @@ func newRealAuth(t testing.TB) *realAuth {
 		{"batcave", []rbac.PermissionSpec{
 			{Name: "batcave:run", Title: "Run the Batcave"},
 			{Name: "batcave:view", Title: "See the Batcave", Class: rbac.ClassView},
+			{Name: "batcave:manage", Title: "Manage the Batcave's runs"},
 		}, []rbac.RoleSeed{
-			{Name: "batcave.keeper", Title: "Keeper", Permissions: []rbac.Permission{"batcave:run", "batcave:view"}},
+			{Name: "batcave.keeper", Title: "Keeper", Permissions: []rbac.Permission{"batcave:run", "batcave:view", "batcave:manage"}},
 			{Name: "batcave.watcher", Title: "Watcher", Permissions: []rbac.Permission{"batcave:view"}},
 		}},
-		{"arkham", []rbac.PermissionSpec{{Name: "arkham:approve", Title: "Approve transfers"}},
-			[]rbac.RoleSeed{{Name: "arkham.warden", Title: "Warden", Permissions: []rbac.Permission{"arkham:approve"}}}},
+		{"arkham", []rbac.PermissionSpec{{Name: "arkham:approve", Title: "Approve transfers"}, {Name: "arkham:manage", Title: "Manage Arkham's runs"}},
+			[]rbac.RoleSeed{
+				{Name: "arkham.warden", Title: "Warden", Permissions: []rbac.Permission{"arkham:approve", "arkham:manage"}},
+				// The approver who may not manage: Approve is not enough on its own.
+				{Name: "arkham.clerk", Title: "Clerk", Permissions: []rbac.Permission{"arkham:approve"}},
+			}},
 	} {
 		dc := r.rb.Declarer(d.ns)
 		if err := dc.Permissions(d.perms...); err != nil {
@@ -265,7 +270,7 @@ func (*sinkJournal) Gap(b *storage.Batch, _ time.Time) error {
 // approval scope without naming it.
 type cast struct {
 	*realAuth
-	lucius, edward, selina *auth.User
+	lucius, edward, selina, harvey *auth.User
 }
 
 func newCast(t testing.TB) *cast {
@@ -273,13 +278,14 @@ func newCast(t testing.TB) *cast {
 	r := newRealAuth(t)
 	admin := r.rb.Compile(rbac.CheckerInput{Roles: []rbac.RoleName{rbac.RoleAdmin}, Interactive: true})
 	if _, err := r.rb.CreateRole(context.Background(), admin, rbac.RoleInput{
-		Name: "custom.everything", Title: "Everything", Permissions: []rbac.Permission{"core:self", "batcave:run", "batcave:view", "arkham:approve"},
+		Name: "custom.everything", Title: "Everything", Permissions: []rbac.Permission{"core:self", "batcave:run", "batcave:view", "arkham:approve", "arkham:manage", "batcave:manage"},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	return &cast{
 		realAuth: r,
 		lucius:   r.user("lucius", "arkham.warden", "batcave.keeper"),
+		harvey:   r.user("harvey", "arkham.clerk"),
 		edward:   r.user("edward", "batcave.watcher"),
 		selina:   r.user("selina", rbac.RoleAdmin),
 	}
@@ -302,12 +308,17 @@ func TestApprove_OverCoreAuth(t *testing.T) {
 	}{
 		{name: "interactive session holding the scope", as: c.as(c.lucius, auth.MethodSession), status: 200, approved: true},
 		{name: "interactive extension holding the scope", as: c.as(c.lucius, extCF), status: 200, approved: true},
-		{name: "key naming the approval scope", as: c.key(c.lucius, "arkham:approve", "batcave:view"), status: 200, approved: true},
+		{name: "key naming the approval scope", as: c.key(c.lucius, "arkham:approve", "arkham:manage", "batcave:view"), status: 200, approved: true},
 		{name: "session without the scope", as: c.as(c.edward, auth.MethodSession), status: 403, code: "permission_denied"},
+		// Approve alone is refused: Perms.Manage is ANDed in (owner ruling 2026-11-22).
+		{name: "session holding Approve without Manage", as: c.as(c.harvey, auth.MethodSession), status: 403, code: "permission_denied"},
+		{name: "extension holding Approve without Manage", as: c.as(c.harvey, extCF), status: 403, code: "permission_denied"},
+		{name: "key naming Approve without Manage", as: c.key(c.harvey, "arkham:approve"), status: 403, code: "permission_denied"},
+		{name: "key naming Manage without Approve", as: c.key(c.lucius, "arkham:manage", "batcave:view"), status: 403, code: "permission_denied"},
 		{name: "extension without the scope", as: c.as(c.edward, extCF), status: 403, code: "permission_denied"},
 		{name: "key that does not name the scope", as: c.key(c.edward, "batcave:view"), status: 403, code: "permission_denied"},
 		{name: "key implying the scope through core:admin", as: c.key(c.selina, "core:admin"), status: 403, code: "tasks.verified_method_required"},
-		{name: "key naming core:admin and the scope is still a name", as: c.key(c.selina, "core:admin", "arkham:approve"), status: 200, approved: true},
+		{name: "key naming core:admin and the scope is still a name", as: c.key(c.selina, "core:admin", "arkham:approve", "arkham:manage"), status: 200, approved: true},
 		{name: "delegated session", as: c.as(c.lucius, auth.MethodSessionDelegated), status: 403, code: "tasks.verified_method_required"},
 		{name: "non-interactive extension", as: c.as(c.lucius, extBadge), status: 403, code: "tasks.verified_method_required"},
 		{name: "forwarded header with no principal", headers: map[string]string{"X-Forwarded-User": "lucius"}, status: 401, code: "unauthenticated"},
@@ -351,7 +362,7 @@ func TestApprove_CoreDefaultRefusesWhatOnlyTheKernelWidens(t *testing.T) {
 	c := newCast(t)
 	for name, as := range map[string]*auth.Principal{
 		"interactive extension": c.as(c.lucius, extCF),
-		"key naming the scope":  c.key(c.lucius, "arkham:approve"),
+		"key naming the scope":  c.key(c.lucius, "arkham:approve", "arkham:manage"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			g := newRig(t)
@@ -382,7 +393,7 @@ func TestRoutes_PermissionTableOverCoreAuth(t *testing.T) {
 			// A route open to any authenticated caller checks the
 			// definition's own scopes in its handler, so its holder gets
 			// them all; any other route's holder gets exactly its floor.
-			floor, held := rbac.Permission("core:self"), []rbac.Permission{"core:self", "batcave:run", "batcave:view", "arkham:approve", scopeView, scopeManage}
+			floor, held := rbac.Permission("core:self"), []rbac.Permission{"core:self", "batcave:run", "batcave:view", "arkham:approve", "arkham:manage", "batcave:manage", scopeView, scopeManage}
 			if r.Perm.Kind() != rbac.KindAuthenticated {
 				floor = r.Perm.Permissions()[0]
 				held = []rbac.Permission{floor}

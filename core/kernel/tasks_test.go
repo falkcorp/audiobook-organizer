@@ -455,6 +455,18 @@ func TestKernelTasks_RegistrationRules(t *testing.T) {
 		{"Start under another module's scope", patrol(func(s *tasks.TaskSpec[struct{}, struct{}]) {
 			s.Perms.Start = rbac.Need("joker:laugh")
 		}), module.ProblemPermissionNamespace},
+		{"Manage under another module's scope", patrol(func(s *tasks.TaskSpec[struct{}, struct{}]) {
+			s.Perms.Manage = rbac.Need("joker:manage")
+		}), module.ProblemPermissionNamespace},
+		{"Manage beside another module's scope", patrol(func(s *tasks.TaskSpec[struct{}, struct{}]) {
+			s.Perms.Manage = rbac.AllOf("gotham:manage", "joker:manage")
+		}), module.ProblemPermissionNamespace},
+		{"no Manage", patrol(func(s *tasks.TaskSpec[struct{}, struct{}]) {
+			s.Perms.Manage = rbac.Requirement{}
+		}), module.ProblemInvalidRegistration},
+		{"Manage nobody lacks", patrol(func(s *tasks.TaskSpec[struct{}, struct{}]) {
+			s.Perms.Manage = rbac.AnyAuthenticated
+		}), module.ProblemInvalidRegistration},
 		{"an undeclared resource kind read", patrol(func(s *tasks.TaskSpec[struct{}, struct{}]) {
 			s.Effects = tasks.ReadOnly(tasks.Res("gotham", "signal"))
 		}), module.ProblemInvalidRegistration},
@@ -483,6 +495,12 @@ func TestKernelTasks_RegistrationRules(t *testing.T) {
 		}).with(func(m *module.Manifest) { m.TaskLedger = []tasks.Kind{patrolKind} })
 		c, _ := taskConfig(t, m)
 		mustNew(t, c)
+	})
+	t.Run("Manage under its own module's or core's scopes accepted", func(t *testing.T) {
+		for _, manage := range []rbac.Requirement{rbac.Need("gotham:manage"), rbac.Need("core:tasks.manage"), rbac.AllOf("gotham:manage", "core:tasks.manage")} {
+			c, _ := taskConfig(t, gotham([]tasks.Kind{patrolKind}, patrol(func(s *tasks.TaskSpec[struct{}, struct{}]) { s.Perms.Manage = manage })))
+			mustNew(t, c)
+		}
 	})
 	t.Run("kinds with no store open", func(t *testing.T) {
 		cfg := testConfig(t, gotham([]tasks.Kind{patrolKind}, patrol()))
