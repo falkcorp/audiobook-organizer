@@ -6,6 +6,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,7 +44,9 @@ func TestGenerate_EveryAtomScopeIsEmitted(t *testing.T) {
 
 // TestGenerate_IsDeterministic: -check byte-compares, so two runs must agree.
 func TestGenerate_IsDeterministic(t *testing.T) {
-	if string(generate(books.AtomTable())) != string(generate(books.AtomTable())) {
+	first := generate(books.AtomTable())
+	second := generate(books.AtomTable())
+	if !bytes.Equal(first, second) {
 		t.Fatal("two runs differ")
 	}
 }
