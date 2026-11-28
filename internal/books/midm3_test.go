@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -282,12 +283,42 @@ func m3Record(t *testing.T, kv map[string]string) (rec storage.DataMigrationReco
 	return rec, true
 }
 
-// midM3Fixture writes the HEAD store and returns it as a kit fixture with its
-// records as HEAD holds them.
-func midM3Fixture(t *testing.T) (*flipFixture, crashmatrix.Fixture, *headKeys, midM3Records) {
+// midM3Set is the fixture and the half states every mid-M3 cell runs over.
+type midM3Set struct {
+	fx     *flipFixture
+	f      crashmatrix.Fixture
+	h      *headKeys
+	before midM3Records
+	states []midM3State
+}
+
+// midM3Shared is the one midM3Set of the process. Building it (2,105 keys
+// written, a kill series and a failed boot) is most of a cell's time, a few
+// minutes under -race, so the four cells share it instead of each building its
+// own. The cells never run in parallel (composedOptions sets process
+// environment), and each restores the state it uses into the shared
+// directories first. TestMain removes the directory (cutoverRuns.dirs).
+var midM3Shared struct {
+	sync.Mutex
+	set *midM3Set
+}
+
+// midM3Sets is the process' midM3Set, built by the first cell that asks. A
+// build that fails fails that cell and is retried by the next.
+func midM3Sets(t *testing.T) *midM3Set {
 	t.Helper()
+	midM3Shared.Lock()
+	defer midM3Shared.Unlock()
+	if midM3Shared.set != nil {
+		return midM3Shared.set
+	}
+	root, err := os.MkdirTemp("", "midm3-")
+	require.NoError(t, err)
+	cutoverRuns.Lock()
+	cutoverRuns.dirs = append(cutoverRuns.dirs, root)
+	cutoverRuns.Unlock()
 	h := &headKeys{}
-	fx := newFlipFixture(t, seedMidM3(t, h), "")
+	fx := newFlipFixtureAt(t, filepath.Join(root, "batcave"), seedMidM3(t, h), "")
 	f := crashmatrix.Fixture{Name: "mid-m3", StateDir: fx.stateDir, DBDir: fx.dbPath}
 	before := midM3RecordsOf(t, rawKVs(t, fx.dbPath))
 	require.Len(t, before.users, 4, "the seed's users (_system and three accounts)")
@@ -295,7 +326,10 @@ func midM3Fixture(t *testing.T) (*flipFixture, crashmatrix.Fixture, *headKeys, m
 	require.Len(t, before.keys, 5+midM3BulkKeys, "the seed's keys")
 	require.Len(t, before.idents, 1, "the seed's OAuth identity")
 	require.Equal(t, 1, before.sessions, "the seed's session")
-	return fx, f, h, before
+	set := &midM3Set{fx: fx, f: f, h: h, before: before}
+	set.states = midM3States(t, f, before)
+	midM3Shared.set = set
+	return set
 }
 
 // midM3States builds the half states M3 can leave on the fixture, each checked
@@ -579,8 +613,9 @@ func TestMidM3_KillLeavesEachRecordInOnePlace(t *testing.T) {
 	if testing.Short() {
 		t.Skip("the boot crash matrix: extraction-gates runs it")
 	}
-	_, f, _, before := midM3Fixture(t)
-	for _, s := range midM3States(t, f, before) {
+	set := midM3Sets(t)
+	f, before := set.f, set.before
+	for _, s := range set.states {
 		t.Run(s.name, func(t *testing.T) {
 			st, err := readAboFlipState(s.clone, f)
 			require.NoError(t, err)
@@ -599,8 +634,9 @@ func TestMidM3_OlderBuildRefusesBeforeAnyWrite(t *testing.T) {
 	if testing.Short() {
 		t.Skip("the boot crash matrix: extraction-gates runs it")
 	}
-	fx, f, _, before := midM3Fixture(t)
-	for _, s := range midM3States(t, f, before) {
+	set := midM3Sets(t)
+	fx, f := set.fx, set.f
+	for _, s := range set.states {
 		t.Run(s.name, func(t *testing.T) {
 			restoreAboFlip(t, s.clone, f)
 			// R0's own check: the storage-format sidecar it reads is above the
@@ -638,8 +674,9 @@ func TestMidM3_ThisBuildResumesEveryRecordOnce(t *testing.T) {
 	if testing.Short() {
 		t.Skip("the boot crash matrix: extraction-gates runs it")
 	}
-	fx, f, h, before := midM3Fixture(t)
-	for _, s := range midM3States(t, f, before) {
+	set := midM3Sets(t)
+	fx, f, h, before := set.fx, set.f, set.h, set.before
+	for _, s := range set.states {
 		t.Run(s.name, func(t *testing.T) {
 			restoreAboFlip(t, s.clone, f)
 			r := bootOverHEADStore(t, fx)
@@ -695,8 +732,8 @@ func TestMidM3_HalfStoreIsNeverServed(t *testing.T) {
 	if testing.Short() {
 		t.Skip("the boot crash matrix: extraction-gates runs it")
 	}
-	fx, f, _, before := midM3Fixture(t)
-	states := midM3States(t, f, before)
+	set := midM3Sets(t)
+	fx, f, before, states := set.fx, set.f, set.before, set.states
 	for _, s := range states {
 		// M3 gone from the list while M8 still names it: the kernel refuses the
 		// DAG at P2, before Register.
