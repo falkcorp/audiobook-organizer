@@ -21,7 +21,6 @@ import (
 	"github.com/falkcorp/mediacore/tasks"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
@@ -477,8 +476,6 @@ func mapApplyError(err error) error {
 		return nil
 	case errors.Is(err, tasks.ErrPreview), errors.Is(err, tasks.ErrFenced), errors.Is(err, tasks.ErrChangedSincePlan):
 		return err
-	case errors.Is(err, opswriter.ErrFenced):
-		return fmt.Errorf("%w: %w", tasks.ErrFenced, err)
 	case errors.Is(err, ErrChangedSincePlan):
 		return fmt.Errorf("%w: %w", tasks.ErrChangedSincePlan, err)
 	default:
@@ -684,10 +681,16 @@ func (k *repairKind) newRunState(rc *tasks.RC) (*runState, error) {
 		if AllowsBookTagsOnly(f) {
 			w.restrictToTags()
 		}
+		// The writer's fence is core's: the attempt context ends, with a cause
+		// (canceled, timed out, shut down, quiesced, abandoned), exactly when
+		// the executor stops the run, and the refusal is tasks.ErrFenced. HEAD's
+		// opswriter.FenceFromContext is not consulted here: core's executor never
+		// puts a HEAD fence on the context, so that fence would answer "always
+		// writable" for a run core has stopped (F5-18 commit 1).
 		runCtx := rc.Context()
 		w.setFence(func() error {
 			if err := runCtx.Err(); err != nil {
-				return fmt.Errorf("%w: %w: the run was stopped (%v)", tasks.ErrFenced, opswriter.ErrFenced, context.Cause(runCtx))
+				return fmt.Errorf("%w: the run was stopped (%v)", tasks.ErrFenced, context.Cause(runCtx))
 			}
 			return nil
 		})
