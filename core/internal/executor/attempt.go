@@ -335,8 +335,10 @@ func (a *attempt) flushTrailing() {
 }
 
 // stopFlush closes the attempt to further flushes and cancels a pending one.
-// run defers it, so it covers finish, a yield or stop (both end in finish) and
-// a fenced attempt (finish returns early).
+// finish calls it before anything else, and every attempt ends in finish (a
+// yield or a stop is a finish; a fenced attempt's finish returns right after
+// it), so one call site covers the attempt's whole end. run does not repeat it:
+// a second call there could never change what the first did.
 func (a *attempt) stopFlush() {
 	a.pmu.Lock()
 	a.pClosed = true
@@ -660,7 +662,6 @@ func (a *attempt) strike(ctx context.Context, kind, detail string) {
 // would leave an uncooperative body to do all its work after the cancel.
 func (a *attempt) run(withBody bool) {
 	defer a.e.attemptExited(a)
-	defer a.stopFlush()
 	if !withBody {
 		a.finish(nil, context.Cause(a.ctx))
 		return

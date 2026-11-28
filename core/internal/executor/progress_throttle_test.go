@@ -38,22 +38,26 @@ func progressWrites(p *tape, id tasks.RunID) []tasks.RunPayload {
 
 // stepRun runs body on a real-interval executor inside a synctest bubble and
 // hands the test the run's tape and ID once the body has started.
-func stepRun(t *testing.T, kind string, body func(rc *tasks.RC), drive func(p *tape, id tasks.RunID)) {
+//
+// gate is created inside the bubble: a channel made outside it is not durably
+// blocking, so synctest.Wait would never return while the body waits on it.
+func stepRun(t *testing.T, kind string, body func(rc *tasks.RC, gate chan struct{}), drive func(p *tape, id tasks.RunID, gate chan struct{})) {
 	t.Helper()
 	synctest.Test(t, func(t *testing.T) {
+		gate := make(chan struct{})
 		p := &tape{}
 		started := make(chan struct{})
 		h := tapeHarness(t, p, []tasks.Definition{
 			taskDef(kind, func(rc *tasks.RC, _ noParams) (string, error) {
 				close(started)
-				body(rc)
+				body(rc, gate)
 				return "done", nil
 			}, readOnly(kind), withTimeout(2*time.Hour)),
 		}, realIntervalConfig, false)
 		id := h.start(kind, tasks.StartRequest{})
 		<-started
 		synctest.Wait()
-		drive(p, id)
+		drive(p, id, gate)
 		h.waitState(id, tasks.StateSucceeded)
 		h.drained()
 	})
@@ -67,8 +71,7 @@ func advance(d time.Duration) { time.Sleep(d); synctest.Wait() }
 // newest position and line, and a Note that is due does not leave the window
 // open for a Set that follows it.
 func TestExecutor_ProgressThrottle_OneWritePerWindow(t *testing.T) {
-	phase2 := make(chan struct{})
-	stepRun(t, "gotham.throttle", func(rc *tasks.RC) {
+	stepRun(t, "gotham.throttle", func(rc *tasks.RC, gate chan struct{}) {
 		pr := rc.Progress()
 		pr.Set(1, tasks.Known(9)) // due: the window's one write
 		pr.Note("alley a")
@@ -76,11 +79,11 @@ func TestExecutor_ProgressThrottle_OneWritePerWindow(t *testing.T) {
 		pr.Note("alley b")
 		pr.Set(3, tasks.Known(9))
 		pr.Note("alley c")
-		<-phase2
+		<-gate
 		pr.Note("rooftop d") // due again: writes at once and opens a new window
 		pr.Set(4, tasks.Known(9))
-		<-phase2
-	}, func(p *tape, id tasks.RunID) {
+		<-gate
+	}, func(p *tape, id tasks.RunID, gate chan struct{}) {
 		if got := progressWrites(p, id); len(got) != 1 || got[0].Done != 1 {
 			t.Fatalf("at t=0 progress writes = %+v, want exactly the first Set", got)
 		}
@@ -94,7 +97,7 @@ func TestExecutor_ProgressThrottle_OneWritePerWindow(t *testing.T) {
 			t.Fatalf("at t=1.1s writes = %+v, want the trailing flush with done 3 and the newest line", got)
 		}
 		advance(time.Second) // t=2.1s: the flush's window has passed
-		phase2 <- struct{}{}
+		gate <- struct{}{}
 		synctest.Wait()
 		if got := progressWrites(p, id); len(got) != 3 || got[2].Message != "rooftop d" {
 			t.Fatalf("at t=2.1s a due Note: writes = %+v, want it written at once as the third", got)
@@ -107,7 +110,7 @@ func TestExecutor_ProgressThrottle_OneWritePerWindow(t *testing.T) {
 		if got := progressWrites(p, id); len(got) != 4 || got[3].Done != 4 || got[3].Message != "rooftop d" {
 			t.Fatalf("writes = %+v, want the trailing flush with done 4 as the fourth", got)
 		}
-		phase2 <- struct{}{}
+		gate <- struct{}{}
 	})
 }
 
@@ -116,18 +119,17 @@ func TestExecutor_ProgressThrottle_OneWritePerWindow(t *testing.T) {
 // and then a Note inside the window it opened. The note must reach the stream
 // within one interval, by the trailing flush, not at the terminal view.
 func TestExecutor_SetThenNotePublishesAtTheRealInterval(t *testing.T) {
-	release := make(chan struct{})
-	stepRun(t, "gotham.cipher", func(rc *tasks.RC) {
+	stepRun(t, "gotham.cipher", func(rc *tasks.RC, gate chan struct{}) {
 		rc.Progress().Set(1, tasks.Known(3))
 		rc.Progress().Note("Riddler cipher cracked")
-		<-release
-	}, func(p *tape, id tasks.RunID) {
+		<-gate
+	}, func(p *tape, id tasks.RunID, gate chan struct{}) {
 		advance(1100 * time.Millisecond)
 		got := progressWrites(p, id)
 		if len(got) == 0 || got[len(got)-1].Message != "Riddler cipher cracked" || got[len(got)-1].Done != 1 {
 			t.Fatalf("after one interval the run's message is not the note: %+v", got)
 		}
-		close(release)
+		close(gate)
 	})
 }
 
@@ -135,12 +137,11 @@ func TestExecutor_SetThenNotePublishesAtTheRealInterval(t *testing.T) {
 // progress write carrying the position and the line, and a second Update inside
 // the window is published at its end with the newest of both.
 func TestExecutor_UpdatePublishesPositionAndNoteTogether(t *testing.T) {
-	release := make(chan struct{})
-	stepRun(t, "gotham.update", func(rc *tasks.RC) {
+	stepRun(t, "gotham.update", func(rc *tasks.RC, gate chan struct{}) {
 		rc.Progress().Update(1, tasks.Known(3), "Scarecrow fear gas traced")
 		rc.Progress().Update(2, tasks.Known(3), "Scarecrow lab found")
-		<-release
-	}, func(p *tape, id tasks.RunID) {
+		<-gate
+	}, func(p *tape, id tasks.RunID, gate chan struct{}) {
 		got := progressWrites(p, id)
 		if len(got) != 1 || got[0].Done != 1 || got[0].Message != "Scarecrow fear gas traced" {
 			t.Fatalf("first Update wrote %+v, want one write with done 1 and its line", got)
@@ -150,7 +151,7 @@ func TestExecutor_UpdatePublishesPositionAndNoteTogether(t *testing.T) {
 		if len(got) != 2 || got[1].Done != 2 || got[1].Message != "Scarecrow lab found" {
 			t.Fatalf("second Update wrote %+v, want the flush with done 2 and its line", got)
 		}
-		close(release)
+		close(gate)
 	})
 }
 
