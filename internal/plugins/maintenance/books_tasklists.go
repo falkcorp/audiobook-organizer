@@ -23,8 +23,9 @@ import (
 // The lists, and what the flip must still decide about each:
 //
 //   - jobs.Kinds over newJobsDeps (the maintenance jobs).
-//   - t6g1Kinds, t6g2Kinds, t6g3Kinds, t6g4Kinds, t6g7Kinds over newT6G1Deps,
-//     newT6G2Deps, newT6G3Deps, newT6G4Deps, newT6G7Deps.
+//   - t6g1Kinds, t6g2Kinds, t6g3Kinds, t6g4Kinds, t6g5Kinds, t6g7Kinds over
+//     newT6G1Deps, newT6G2Deps, newT6G3Deps, newT6G4Deps, newT6G5Deps,
+//     newT6G7Deps.
 //   - auxStoreCompactKindList, the books half of db_optimize.
 //
 // Group 6 is NOT in BooksTaskLists. Its 14 kinds hold a library-scan
@@ -86,6 +87,9 @@ type BooksTaskInputs struct {
 	// G1 serves group 1 (the author, activity-index and authority kinds); Ops is
 	// its store and StandDownKey its stand-down key.
 	G1 G1Inputs
+	// G5Host serves group 5 (the book-file, narrator, iTunes and metadata-refresh
+	// kinds): what the host serves that is not a row of Ops, which is its store.
+	G5Host G5Host
 	// G7 serves group 7 (the repair, report and user-merge kinds). Its RootDir
 	// and StandDownKey are the shared ones above, whatever it carries.
 	G7 G7Inputs
@@ -150,6 +154,7 @@ func BooksTaskLists(in BooksTaskInputs) ([]tasks.Definition, error) {
 	n.check("G1.AIJournalRetentionDays", in.G1.AIJournalRetentionDays != nil)
 	n.check("G1.InvalidateAuthorsCache", in.G1.InvalidateAuthorsCache != nil)
 	n.check("G1.InvalidateDedupCache", in.G1.InvalidateDedupCache != nil)
+	n.check("G5Host", isSet(in.G5Host))
 	n.check("G7.Reads", isSet(in.G7.Reads))
 	n.check("G7.Writes", isSet(in.G7.Writes))
 	n.check("G7.InvalidateSeriesCache", in.G7.InvalidateSeriesCache != nil)
@@ -184,6 +189,8 @@ func BooksTaskLists(in BooksTaskInputs) ([]tasks.Definition, error) {
 		return nil, fmt.Errorf("maintenance group 4: %w", err)
 	}
 	out = append(out, g4...)
+
+	out = append(out, p.t6g5Kinds(newT6G5Deps(in.Ops, in.G5Host, in.StandDownKey), in.Schedules)...)
 
 	g7 := in.G7
 	g7.RootDir, g7.StandDownKey = in.RootDir, in.StandDownKey

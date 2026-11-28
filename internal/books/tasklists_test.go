@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	svcmetafetch "github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
@@ -93,6 +94,32 @@ func (listsG4Host) DedupTriageExactPending(context.Context, bool) (*maintenance.
 	return &maintenance.TriageReport{}, nil
 }
 
+// listsG5Host is group 5's host: the fixture's store serves every accessor.
+type listsG5Host struct {
+	s    *database.PebbleStore
+	root string
+}
+
+func (h listsG5Host) RootDir() string { return h.root }
+func (listsG5Host) RunMetadataRefreshScan(context.Context, operations.ProgressReporter) error {
+	return nil
+}
+func (h listsG5Host) OperationQueueStore() maintenance.OpQueueReader { return h.s }
+func (listsG5Host) PlanLibraryClone(*database.Book, []database.BookFile) ([]string, error) {
+	return nil, nil
+}
+func (listsG5Host) LibraryITunesPath(p string) string                      { return p }
+func (h listsG5Host) BookTagReader() maintenance.BookTagReader             { return h.s }
+func (h listsG5Host) VersionPrimaryStore() maintenance.VersionPrimaryStore { return h.s }
+func (h listsG5Host) PlaylistStore() database.UserPlaylistStore            { return h.s }
+func (listsG5Host) MergeBooks(string, []string, string) (int, error)       { return 0, nil }
+func (listsG5Host) CloneBookIntoLibrary(*database.Book, []database.BookFile, string) (string, error) {
+	return "", nil
+}
+func (h listsG5Host) MergeUserStateStore() merge.UserStateRepairStore { return h.s }
+func (h listsG5Host) MetadataCacheStore() database.MetadataCacheStore { return h.s }
+func (listsG5Host) InvalidateAuthorsCache()                           {}
+
 type listsAux struct{}
 
 func (listsAux) OptimizeAIScanStore(context.Context) error { return nil }
@@ -162,6 +189,7 @@ func listsFixture(t *testing.T) taskListInputs {
 			Runs:      listsRuns{},
 			Ops:       store,
 			G4Host:    listsG4Host{root: root},
+			G5Host:    listsG5Host{s: store, root: root},
 			AuxStores: listsAux{},
 			G1: maintenance.G1Inputs{
 				PlanRuns:   listsRuns{},
@@ -246,9 +274,8 @@ var notYetBuilt = map[tasks.Kind]string{
 	// the dedup plugin's KindDeps builder.
 	"books.dedup.label-refinement": "dedup plugin",
 	"books.dedup.llm-review":       "dedup plugin",
-	// maintenance group 5's builder; the two kinds below are group 6 (held for
-	// TODO-F5-11-HOLD-RENEW; orphan-book-files-cleanup is one of its 14).
-	"books.maintenance.metadata-refresh":             "maintenance g5",
+	// the two kinds below are group 6 (held for TODO-F5-11-HOLD-RENEW;
+	// orphan-book-files-cleanup is one of its 14).
 	"books.maintenance.orphan-book-files-cleanup":    "maintenance g6 (held, TODO-F5-11-HOLD-RENEW)",
 	"books.maintenance.nightly-compact-activity-log": "maintenance g6 (held, TODO-F5-11-HOLD-RENEW)",
 }
@@ -431,6 +458,7 @@ func TestF5_MissingMaintenanceInputRefusesByName(t *testing.T) {
 		"G4Host":                     func(in *taskListInputs) { in.Maintenance.G4Host = nil },
 		"AuxStores":                  func(in *taskListInputs) { in.Maintenance.AuxStores = nil },
 		"StandDownKey":               func(in *taskListInputs) { in.Maintenance.StandDownKey = "" },
+		"G5Host":                     func(in *taskListInputs) { in.Maintenance.G5Host = nil },
 		"G1.PlanRuns":                func(in *taskListInputs) { in.Maintenance.G1.PlanRuns = nil },
 		"G1.FetchStore":              func(in *taskListInputs) { in.Maintenance.G1.FetchStore = nil },
 		"G1.NewFetchService":         func(in *taskListInputs) { in.Maintenance.G1.NewFetchService = nil },
