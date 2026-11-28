@@ -128,6 +128,17 @@ type StandaloneOptions struct {
 	// (core/levels) once the cutover is declared, whose level a flipped store
 	// carries and an open that registers no owner for refuses as newer.
 	ExtraOwners []storage.OwnerSpec
+	// Admit, when set, is asked of the opened store by InitializeStoreWith
+	// before it does anything else to it: before the opv3 reconcile (which
+	// writes) and before the store becomes the process's global one. A refusal
+	// closes the store and is returned, wrapped, so the caller sees the reason
+	// and the store is left as the open found it. It exists for a process that
+	// must not run over a store it cannot serve correctly (the operation child
+	// over a store whose identity cutover is done). The open itself, which
+	// runs books' migrations as core steps, is not ahead of it: the check has
+	// to ask the opened store, and on a store the parent already migrated that
+	// open writes nothing. OpenStandalone does not call it.
+	Admit func(Store) error
 }
 
 // owners are the storage owners an open registers.

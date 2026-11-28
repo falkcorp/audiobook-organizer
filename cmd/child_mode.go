@@ -140,18 +140,21 @@ func RunOperationRunner() {
 		os.Exit(2)
 	}
 	snap := config.Snapshot()
+	// The identity cutover is checked as the store opens, before the opener's
+	// opv3 reconcile writes to it and before it becomes the global store: see
+	// errChildOverIdentityStore. newServer below is built without
+	// server.WithIdentity, so this refusal (database.StandaloneOptions.Admit) is
+	// what keeps it off a migrated store. A refusal comes back as the opener's
+	// error, which closes the store.
 	store, err := initializeChildStore(snap.DatabaseType, dbPath,
-		books.StandaloneOptions(database.StandaloneOptions{StateDir: stateDir}))
+		books.StandaloneOptions(database.StandaloneOptions{
+			StateDir: stateDir,
+			Admit: func(s database.Store) error {
+				return refuseChildOverIdentityStore(context.Background(), s)
+			},
+		}))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "child mode: initializeChildStore: %v\n", err)
-		os.Exit(2)
-	}
-	// The identity cutover is checked before anything else runs over the store:
-	// see errChildOverIdentityStore. newServer below is built without
-	// server.WithIdentity, so this refusal is what keeps it off a migrated store.
-	if err := refuseChildOverIdentityStore(context.Background(), store); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		_ = store.Close()
 		os.Exit(2)
 	}
 	// HEAD loaded the stored settings here (config.LoadConfigFromDatabase);
