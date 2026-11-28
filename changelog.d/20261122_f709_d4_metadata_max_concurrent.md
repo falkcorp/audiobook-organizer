@@ -1,3 +1,0 @@
-### Added
-
-- Core integrations gain a per-instance `max_concurrent` limit (`integrations.Limits.MaxConcurrent`, stored with the instance, accepted and returned by the integrations API, and merged over the adapter's default like the other limits). The metadata chain enforces it: it bounds the searches in flight to one provider across all searches of the chain, a cached answer takes no slot, a search that queues for a slot does not spend its provider deadline while waiting, and a caller that cancels leaves the queue cleanly. Zero is no bound. This is the carrier for the old per-source `max_concurrent` setting; nothing running sets it yet.

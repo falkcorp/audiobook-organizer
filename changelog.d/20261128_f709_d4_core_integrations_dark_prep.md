@@ -1,0 +1,9 @@
+### Added
+
+- A new architecture test, `TestDescriptorCallers_*` in `internal/arch`, pins which audiobook-organizer packages may build or register an integration descriptor: only the metadata and whisper adapter packages may reference the kind constructors, and no package may reference `integrations.NewDescriptor` or the core adapters' `Descriptor()` functions until the integrations flip lists its one registering package. It is the audiobook-organizer twin of the core archtest and changes no running code.
+- Core integrations gain a per-instance `max_concurrent` limit (`integrations.Limits.MaxConcurrent`, stored with the instance, accepted and returned by the integrations API, and merged over the adapter's default like the other limits). The metadata chain enforces it: it bounds the searches in flight to one provider across all searches of the chain, a cached answer takes no slot, a search that queues for a slot does not spend its provider deadline while waiting, and a caller that cancels leaves the queue cleanly. Zero is no bound. This is the carrier for the old per-source `max_concurrent` setting; nothing running sets it yet.
+
+### Changed
+
+- The core download package now types an item's and a file's `LocalPath`, and `Pool.Relocate`'s target directory, as `library.Path`, and the Pool maps client paths through the library's path mapper. The download-local copy of the mapper (`download.Mapping`, `PathMapper`, `NewMapper`, `ErrUnmapped`) is deleted; `download.Source` stays. No running code calls it yet.
+- `library.PathMapper.ToRemote` now refuses a path segment that holds a backslash or a colon when the remote is a Windows, UNC or drive-URL path, because there it is a separator or a drive switch. Nothing live reaches it yet. `library.NewPathMapper` builds a mapper over mappings a caller holds.
