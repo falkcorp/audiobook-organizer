@@ -119,7 +119,7 @@ file:
    - **Library.**
      - Register `TransferRecoverTask`.
      - Build `library.New`, then `Reload`.
-     - Mount `libraryhttp` (`core:library.browse`).
+     - Mount `libraryhttp` (`rbac.OperatorRequirement()`, the seven core scopes of HEAD's `settings.manage` atom, which include `core:library.browse`).
      - Type `core.library.roots` and `mappings` in `core_sections.go`.
    - **Notify config.** `core.notify.max_attempts` and `max_age` go into `notify.Config`; delivery is an
      `outbox.Consume` with `Unordered()`.
@@ -254,9 +254,14 @@ Announce the move window one working day ahead, naming every 04 row listed under
      `core/integrations/ai/health.go`, about 15 lines); an operator's explicit Test may clear either.
 5. **Provider gates**: HEAD's `internal/metadata/providerhttp`, `dailyquota`, `throttle*`, `circuitbreaker` replaced by
    core `providerhttp`; the metadata chain on `integrations/metadata` (the `switch src.ID` deleted, 05-metadata M3.10);
-   `/api/v1/metadata/providers/throttles` deleted, the SPA and scripts on instance health and `DELETE …/hold`.
+   `DELETE …/hold` on the instance routes. `/api/v1/metadata/providers/throttles` is **not** deleted: `library.view` holders
+   read it, core cannot express `books:view` yet, and the SPA panels (`ThrottlePanel.tsx`, `MaintenanceTab.tsx`) keep calling it
+   (todo.d `f7-09-retire-throttles-route`). `/ai/test-connection` (`library.edit_metadata`) and `/deluge/status`,
+   `/deluge/test-connection` (the `integrations.manage` atom) stay alive too, until core can express them per kind (W6 per-kind
+   co-requirement, todo.d `f7-09-enable-core-download-health`). The per-kind rules are in
+   [`f7-09-integrations-per-kind-reach`](../../plans/platform-core/f7-09-integrations-per-kind-reach.md).
 6. **Library roots**: books reads roots through `library.Scope`; `ImportPathStore` deleted; scanner, autoscan and the
-   filesystem handlers write `rootscan:<root ID>`; the browse route under `core:library.browse` mounted, HEAD's browse
+   filesystem handlers write `rootscan:<root ID>`; the browse route under `rbac.OperatorRequirement()` (includes `core:library.browse`) mounted, HEAD's browse
    API and the `fileops` `init()` registration deleted; `internal/watcher` → `Manager.Watch`.
 7. **Search**: books' index on `storage/index` at `<db parent>/index/books/books.bleve`, rebuilt at cutover;
    `internal/search` moves to `core/internal/bleveindex` and `core/storage/index` (books keeps document building and
@@ -372,8 +377,8 @@ for p in internal/plugin internal/ai/aijobs internal/aidispatch internal/deluge 
 #    deploy/grafana/dashboards/audiobook-organizer-ai.json, deploy/prometheus/alert-rules.yml, alert-rules.test.yml]
 grep -rn 'ai_dispatch\|"ai\.\(requests\|failures\|tokens\|request\.duration\)' --include='*.go' internal/ | grep -v _test | wc -l
 grep -l 'ai_dispatch\|ai_requests' deploy/grafana/dashboards/*.json deploy/prometheus/*.yml
-# 4. Routes this PR deletes. [evidence: wire_metadata_routes.go:58-60 throttles; wire_media_routes.go:50 ai/test-connection;
-#    handlers/aibackends ai/capabilities and ai/endpoints/status; handlers/plugins.go /api/v1/plugins*]
+# 4. Routes this PR deletes. Throttles (wire_metadata_routes.go:58) and ai/test-connection (wire_media_routes.go:50) are KEPT:
+#    see the per-kind reach table. [evidence: handlers/aibackends ai/capabilities and ai/endpoints/status; handlers/plugins.go /api/v1/plugins*]
 grep -rn '"/metadata/providers/throttles\|"/ai/test-connection\|"/ai/capabilities\|"/ai/endpoints/status\|plugins' \
   --include='*.go' internal/server/wire_*.go | grep -v _test
 # 5. The dark packages and the M6 step. Expected: each present; M6 not yet in steps.go

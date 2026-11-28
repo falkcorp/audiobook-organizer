@@ -557,10 +557,14 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
 | Route | Permission |
 |---|---|
 | `GET /api/core/v1/integrations/adapters?kind=` (Meta + settings schema) | `core:integrations.read` |
-| `GET, POST /api/core/v1/integrations/{kind}/instances` | read / `core:integrations.manage` |
-| `GET, PUT, DELETE /api/core/v1/integrations/{kind}/instances/{id}` | read / manage |
-| `POST /api/core/v1/integrations/{kind}/test` (unsaved body) and `.../instances/{id}/test` (unsaved body for that instance; a stored secret fills an omitted field only while no destination origin changes, M1.3 `Test`, SEC8-10) | manage |
-| `GET .../instances/{id}/health`; `DELETE .../instances/{id}/hold` (release a hold, as `ThrottleRegistry.ReleaseHold`, `internal/metadata/throttle_registry.go:338`) | read / manage |
+| `GET, POST /api/core/v1/integrations/{kind}/instances` | the instance requirement: `rbac.OperatorRequirement()`, the seven core scopes of HEAD's `settings.manage` atom, for every kind |
+| `GET, PUT, DELETE /api/core/v1/integrations/{kind}/instances/{id}` | the instance requirement |
+| `POST /api/core/v1/integrations/{kind}/test` (unsaved body) and `.../instances/{id}/test` (unsaved body for that instance; a stored secret fills an omitted field only while no destination origin changes, M1.3 `Test`, SEC8-10) | per kind, in the handler (the route's `Perm` is the floor `core:integrations.manage`): `ai`, `metadata`, `notify` ask the instance requirement; `download` and `indexer` are not served (404). The `integrations.manage` atom gains no test endpoint it lacks at HEAD |
+| `GET .../instances/{id}/health` | per kind, as the test routes: `ai`, `metadata`, `notify` ask the instance requirement; `download` is 404 until the W6 per-kind co-requirement lands (HEAD's `/deluge/status` asks the `integrations.manage` atom, which core cannot express per kind yet; the legacy route stays alive); `indexer` is 404 (no HEAD surface) |
+| `DELETE .../instances/{id}/hold` (release a hold, as `ThrottleRegistry.ReleaseHold`, `internal/metadata/throttle_registry.go:338`) | the instance requirement |
+
+The per-kind rules and the HEAD route each one mirrors, with file:line, are in
+[`f7-09-integrations-per-kind-reach`](../../plans/platform-core/f7-09-integrations-per-kind-reach.md). The adapters list stays on `core:integrations.read`.
 
 **When the routes land, and what they replace.** These `/api/core/v1/integrations/...` routes land at **F7**, the
 integrations flip (03 §3.8), in the PR that registers M6. They replace ABO's integration handlers: the class-`i`
@@ -1180,7 +1184,7 @@ exactly N; R5-4). Store conformance: `providerhttptest.GateStoreSuite(t, factory
 | Pebble keys `provider_throttle:<id>` (`internal/database/provider_throttle.go:29`), `provider_daily_budget:<id>` (`dailyquota.go:85`) | **dropped** by books' R2 step M6 (M1.10): holds and quota counts are transient and are reset, not converted (D12 (b)), so the first R2 boot starts with no hold and a fresh day's count, and the step deletes HEAD's rows. A provider whose own daily limit is already spent answers with its quota error, and the gate sets the hold again (M2.4). From R2 every hold and counter is in `NativeGateStore` (`c/providerhttp/`, M2.4) |
 | `cmd/root.go:405-418` attach ordering | constructor ordering inside `app.New` |
 | HEAD's `maintenance.throttle-reset` op | the core kind `core.integrations.release-holds` (M2.4); the HEAD definition ID is renamed through books' kind-rename map (05-tasks) |
-| `/api/v1/metadata/providers/throttles` (`internal/server/handlers/metadata/provider_throttles.go:43`) | `GET .../instances/{id}/health` (`Hold`) and `DELETE .../hold`; the old path is deleted in R2, and the SPA and the first-party scripts switch in the same release (09) |
+| `/api/v1/metadata/providers/throttles` (`internal/server/handlers/metadata/provider_throttles.go:43`) | `GET .../instances/{id}/health` (`Hold`) and `DELETE .../hold`; the old path stays alive: `library.view` holders read it and core cannot express `books:view` yet, so it is retired only once a core route can (todo.d `f7-09-retire-throttles-route`; per-kind table, 05-metadata M1.3) |
 
 ### M2.11 Open items
 
@@ -1628,7 +1632,7 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
   rule. M1.10 rewritten: books' R2 step M6 migrates every HEAD instance to a native row (IDs kept, secrets by ref
   after M2, `Local` bound to the stored origin and `OperatorSecretOrigin` for the four operator-secret pairs,
   `auth_ref` rows get a key copy; the auth-off writability is not carried). M2.10: throttle and quota rows dropped
-  (D12 F2); the throttles route is deleted, not aliased. M1.9 and M2.9 reduced to the native tests plus migration
+  (D12 F2); the throttles route is kept (it serves `library.view`), not aliased. M1.9 and M2.9 reduced to the native tests plus migration
   tests. Stage references re-keyed to R2. Consistency pass: M1.4 cites 05-config §1.4 step 7; M1.10 states that M2 leaves the class-`i` blob fields and M6 deletes the blob (lead decision L10); the Deluge daemon password gets its own secret `integrations.download.deluge.daemon_password`; `pcache:` is a plain books family; M2.4 declares the task `core.integrations.release-holds` (HEAD's `maintenance.throttle-reset`, 05-tasks) with its test and migration row; D12's answers cited as D12 (a)–(d). Final consistency sweep: the AI endpoint key-copy test is cited by 05-ai's own name, `TestAIEndpointMigration_AuthRefKeyCopy` (05-ai §9).
 - Round 13 (2026-11-04): IMPL-5 (`core.integrations.release-holds` registered from F5 through F2's minimal owner registration, extended at F7; the interim backend `providerhttp.InterimHolds`).
 - Round 14 (2026-11-05): V23 (checked: no round-13 ruling is cited bare; the bare R4, R5, R7 and R8 left in the text are 03 §3.5's rules), V27 (M1.10 cites 05-rbac §7.1 for `core.integration.local_migrated`, staged in M6's chunk batch).

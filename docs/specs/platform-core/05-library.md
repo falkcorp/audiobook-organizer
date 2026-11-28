@@ -540,7 +540,7 @@ reconciles watched roots whenever the registry changes, without a restart (kept 
 | The app's own directories (the DB's parent with its indexes, aux DBs and backups, and the state directory; there is no data-dir key, 05-config §1.7) may not be inside any root unless excluded via `AppDir`; registration warns and walkers skip it (successor of `appdirs`). | registration |
 
 Permissions declared by core (names per 03 §3.6): `core:library.manage` (roots, mappings,
-quarantine purge), `core:library.browse` (directory picker; replaces `BrowseDirectory`'s allow-list,
+quarantine purge), `core:library.browse` (directory picker, asked together with the other six scopes of HEAD's `settings.manage` atom, `rbac.OperatorRequirement()`, because HEAD gates the picker with that atom and `core:library.browse` alone is wider; see [`f7-09-integrations-per-kind-reach`](../../plans/platform-core/f7-09-integrations-per-kind-reach.md) table 4; replaces `BrowseDirectory`'s allow-list,
 `fileops/service.go:46-118`, with "inside a registered root or a path an admin is registering"). Both are in the full
 `core:*` scope catalog that F2, the foundation PRs, declares with their class and flags (05-rbac §5), so M3's atom
 table can write them and `httpapi.Build` can validate them from F4, although `library` is wired only at F7 (IMPL-4).
@@ -684,7 +684,7 @@ and ABO passes its own (05-metrics).
 | `internal/libroot` (`Mounted`, `ReportPathNotify`, ownership checks) | `library.Root.Mounted` (bootstrap heuristic) and `Root.AppDir`; books keeps `.reports` as its app-dir name |
 | `internal/pathutil` (`ValidateRel`, `SplitRoot`, `JoinRoot`, `CutPathPrefix`, `IsWithin`, `UnderProtectedPath`, `ShouldSkipDir`) | core `library` internals (`Path` validation, `Resolve`, `Abs`, walk skip rules); `FrozenITunesSegment`, `VersionsDirName`, `PathVars` naming stay in books |
 | `internal/fileops` copy/reflink/hash/sync seams | `core/internal/libfs` + `Transfer`/`Hash`; `book_file_hash_recorder.go`, `write_tags_safe.go` (tag rewrite + provenance) stay in books on top of `RootFS` |
-| `internal/fileops/service.go` + `register.go` (browse, `init()` registration) | core browse route under `core:library.browse`; `init()` deleted (R5) |
+| `internal/fileops/service.go` + `register.go` (browse, `init()` registration) | core browse route under `rbac.OperatorRequirement()` (includes `core:library.browse`); `init()` deleted (R5) |
 | `organizer.safeRename`, `versions.renameNoReplace`, `quarantine.moveNoClobber` | `RootFS.RenameNoReplace` (three implementations → one) |
 | organizer strategies (`organizer.go:285-306`) | `Transfer` with `Auto`/`Copy`/`Hardlink`/`Reflink`/`Symlink` |
 | `internal/quarantine` | books policy over `Manager.Quarantine`/`Release` with `Quarantine: ".failed"` |
