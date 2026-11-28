@@ -271,6 +271,41 @@ func TestRunDerived_LoadIsGivenTheArtifactDirAndTheCurrentGeneration(t *testing.
 	}
 }
 
+// TestRunDerived_RecordIsWrittenAfterLoad: while Load runs, the record is
+// still the one the previous boot left. A record written first would make a
+// crash inside Load look like a finished decision.
+func TestRunDerived_RecordIsWrittenAfterLoad(t *testing.T) {
+	ctx := context.Background()
+	db := bootDerivedOn(t, ctx, vfs.NewCrashableMem(), gothamOwners())
+	old := storage.DerivedRecord{Version: "2", State: storage.DerivedReady, BuiltAt: fixedNow().Add(-time.Hour)}
+	for _, n := range []string{"signal", "cave"} {
+		if err := db.PutDerivedRecord(ctx, "gotham", n, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var during []storage.DerivedRecord
+	spy := func(name string) storage.DerivedHooks {
+		return storage.DerivedHooks{Load: func(ctx context.Context, _ string, _ storage.Generation) (bool, error) {
+			rec, _, _ := db.DerivedRecord(ctx, "gotham", name)
+			during = append(during, rec)
+			return true, nil
+		}}
+	}
+	decls := []derivedDecl{
+		{Module: "gotham", Name: "signal", Hooks: spy("signal"), Build: buildTask("gotham", "signal")},
+		{Module: "gotham", Name: "cave", Hooks: spy("cave"), Build: buildTask("gotham", "cave")},
+	}
+	if _, err := runDerived(ctx, db, "/d", decls, false, (&queue{}).start, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	if len(during) != 2 || during[0] != old || during[1] != old {
+		t.Errorf("the records seen inside Load = %+v, want the old %+v twice", during, old)
+	}
+	if rec := readRecord(t, db, "signal"); rec.Version != "3" {
+		t.Errorf("after the run the record = %+v, want version 3", rec)
+	}
+}
+
 // TestRunDerived_RecordIsDurableBeforeTheRunIsQueued: at the moment start is
 // called the record already says building, at the declared version.
 func TestRunDerived_RecordIsDurableBeforeTheRunIsQueued(t *testing.T) {
@@ -588,6 +623,7 @@ func TestDerivedProblems(t *testing.T) {
 		{"no Load hook", []derivedDecl{good[0], {Module: "gotham", Name: "cave", Build: buildTask("gotham", "cave")}}, `"cave" has no Load hook`},
 		{"Snapshot alone is not hooks", []derivedDecl{good[0], {Module: "gotham", Name: "cave", Hooks: storage.DerivedHooks{Snapshot: func(context.Context, string, storage.Generation) error { return nil }}, Build: buildTask("gotham", "cave")}}, `"cave" has no Load hook`},
 		{"no build task", []derivedDecl{good[0], {Module: "gotham", Name: "cave", Hooks: ld}}, `"cave" has no build task`},
+		{"a build task of another module", []derivedDecl{good[0], {Module: "gotham", Name: "cave", Hooks: ld, Build: buildTask("wayne", "cave")}}, `build task of kind "wayne.derived.cave.build", want exactly "gotham.derived.cave.build"`},
 		{"a build task of another kind", []derivedDecl{good[0], {Module: "gotham", Name: "cave", Hooks: ld, Build: buildTask("gotham", "signal")}}, `build task of kind "gotham.derived.signal.build", want exactly "gotham.derived.cave.build"`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
