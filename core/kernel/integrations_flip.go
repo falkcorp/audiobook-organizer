@@ -102,8 +102,11 @@ type integrationHealthChanged struct {
 	Status   string `json:"status"`   // HealthStatus.String(): ok, degraded, down, auth_failed, misconfigured, disabled
 }
 
-// integrationHealthTopic is the bus-only topic (not durable: a missed move is
-// re-observed by the next probe).
+// integrationHealthTopic is the bus-only topic. It is not durable and a missed
+// move is not made up: the Registry reports a status once, when it moves, and
+// the bus drops an event for a subscriber whose queue is full (queue_full), so a
+// consumer that must know the state now asks the Registry (Health), and the
+// topic only tells it that something changed.
 func integrationHealthTopic() events.Topic[integrationHealthChanged] {
 	return events.NewTopic[integrationHealthChanged](integrationHealthTopicName)
 }
@@ -246,12 +249,25 @@ func isNil(v any) bool {
 }
 
 // publishHealth returns the Registry's HealthChanged hook: one event per
-// status move on integrationHealthTopic, keyed by the instance. The Registry
-// calls the hook after it released its health lock, so the publish (which never
-// blocks and never fails) is the whole body. It runs on the probing goroutine.
-func publishHealth(pub func() events.Publisher) func(ref integrations.Ref, h integrations.Health) {
-	return func(ref integrations.Ref, h integrations.Health) {
-		if pub == nil {
+// status move on integrationHealthTopic, keyed by the instance, in the order
+// the Registry recorded the moves.
+//
+// The first status observed of an instance is published only when it is not ok.
+// Every restart observes every instance once, and an ok on a topic whose
+// default severity is warning would notify the operator of every instance on
+// every boot, which is not news; an instance that boots into a broken state is.
+// A later move to ok (a recovery) is published.
+//
+// The Registry calls the hook with its health lock held, so it must not block
+// and must not call back into the Registry. The body is only events.Publish,
+// which does neither: it encodes the payload, reads the origin from the
+// context, and does a non-blocking enqueue under each subscriber's own queue
+// mutex, a leaf lock; no subscriber code runs on this goroutine (a full queue
+// drops the event and logs at most once a minute). Nothing on that path takes a
+// Registry lock, so holding the health lock across it cannot deadlock.
+func publishHealth(pub func() events.Publisher) func(ref integrations.Ref, h integrations.Health, first bool) {
+	return func(ref integrations.Ref, h integrations.Health, first bool) {
+		if pub == nil || (first && h.Status == integrations.HealthOK) {
 			return
 		}
 		p := pub()

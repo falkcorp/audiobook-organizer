@@ -15,8 +15,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -131,6 +133,7 @@ type integRig struct {
 	signal *integrationstest.Fake
 	health *healthEvents
 
+	fences   int
 	mu       sync.Mutex
 	integ    integrationsSettings
 	library  librarySettings
@@ -548,9 +551,56 @@ func TestBuildIntegrations_LANAllowAndDisabled(t *testing.T) {
 	}
 }
 
+// healthFence waits until the bus has delivered every health event published
+// before the call, by publishing a marker on the same topic: a subscriber's
+// queue is FIFO, so the marker arrives after everything ahead of it. It returns
+// the events of the real instances, in delivery order, without the markers.
+func (r *integRig) healthFence() []events.Envelope[integrationHealthChanged] {
+	r.t.Helper()
+	r.fences++
+	marker := "fence-" + strconv.Itoa(r.fences)
+	events.Publish(r.bus, context.Background(), integrationHealthTopic(), marker, integrationHealthChanged{Instance: marker})
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		all := r.health.all()
+		for _, e := range all {
+			if e.Key == marker {
+				var out []events.Envelope[integrationHealthChanged]
+				for _, e := range all {
+					if !strings.HasPrefix(e.Key, "fence-") {
+						out = append(out, e)
+					}
+				}
+				return out
+			}
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	r.t.Fatalf("the health fence %s never arrived", marker)
+	return nil
+}
+
+func (r *integRig) setSignalHealth(st integrations.HealthStatus) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.signalHC = func(context.Context, *integrationstest.FakeInstance) integrations.Health {
+		return integrations.Health{Status: st, Message: "http://192.0.2.9/leak?token=joker"}
+	}
+}
+
+func healthStatuses(es []events.Envelope[integrationHealthChanged]) []string {
+	var out []string
+	for _, e := range es {
+		out = append(out, e.Payload.Status)
+	}
+	return out
+}
+
 // TestIntegrationsHealth_PublishesOnMoveOnly: the health topic carries one
-// event for the first observation of an instance and one for each status move,
-// not one per probe, with fixed tokens only.
+// event for each status move and none for a probe that leaves the status where
+// it was, with fixed tokens only. The first observation of an instance that is
+// ok is not a move worth a warning-severity event (TestIntegrationsHealth_
+// FirstObservation).
 func TestIntegrationsHealth_PublishesOnMoveOnly(t *testing.T) {
 	r, in := newIntegRig(t, nil)
 	s := r.buildLoaded(in)
@@ -558,49 +608,26 @@ func TestIntegrationsHealth_PublishesOnMoveOnly(t *testing.T) {
 	if _, err := s.registry.Put(integAdmin(), integSignalConfig(0), integPassword("riddle-me-this")); err != nil {
 		t.Fatal(err)
 	}
-	wait := func(n int) []events.Envelope[integrationHealthChanged] {
-		t.Helper()
-		deadline := time.Now().Add(5 * time.Second)
-		for time.Now().Before(deadline) {
-			if got := r.health.all(); len(got) >= n {
-				return got
-			}
-			time.Sleep(5 * time.Millisecond)
+	for range 4 {
+		if err := s.probeAll(ctx); err != nil {
+			t.Fatal(err)
 		}
-		t.Fatalf("%d health event(s), want %d", len(r.health.all()), n)
-		return nil
 	}
-	settle := func() { time.Sleep(100 * time.Millisecond) }
+	if got := r.healthFence(); len(got) != 0 {
+		t.Fatalf("%d health events after four probes of one ok status, want none: %v", len(got), healthStatuses(got))
+	}
 
-	base := len(r.health.all())
-	if err := s.probeAll(ctx); err != nil {
-		t.Fatal(err)
-	}
-	wait(base + 1)
+	r.setSignalHealth(integrations.HealthDown)
 	for range 3 {
 		if err := s.probeAll(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
-	settle()
-	if n := len(r.health.all()); n != base+1 {
-		t.Fatalf("%d health events after four probes of one status, want %d (first observation only)", n, base+1)
+	got := r.healthFence()
+	if len(got) != 1 {
+		t.Fatalf("%d health events after one move probed three times, want 1: %v", len(got), healthStatuses(got))
 	}
-
-	r.mu.Lock()
-	r.signalHC = func(context.Context, *integrationstest.FakeInstance) integrations.Health {
-		return integrations.Health{Status: integrations.HealthDown, Message: "http://192.0.2.9/leak?token=joker"}
-	}
-	r.mu.Unlock()
-	if err := s.probeAll(ctx); err != nil {
-		t.Fatal(err)
-	}
-	got := wait(base + 2)
-	settle()
-	if n := len(r.health.all()); n != base+2 {
-		t.Fatalf("%d health events after one move, want %d", n, base+2)
-	}
-	last := got[len(got)-1]
+	last := got[0]
 	if last.Payload != (integrationHealthChanged{Kind: "notify", Instance: "gcpd-roof", Status: "down"}) {
 		t.Fatalf("payload = %+v", last.Payload)
 	}
@@ -610,6 +637,174 @@ func TestIntegrationsHealth_PublishesOnMoveOnly(t *testing.T) {
 	raw, _ := json.Marshal(last.Payload)
 	if strings.Contains(string(raw), "192.0.2.9") || strings.Contains(string(raw), "joker") {
 		t.Fatalf("the payload carries the probe's message: %s", raw)
+	}
+}
+
+// TestIntegrationsHealth_FirstObservation: every restart observes every
+// instance once, so an instance whose first status is ok is not published (it
+// would notify the operator of every instance on every boot), one whose first
+// status is not ok is (booting into a broken state is news), and a later move
+// to ok is a recovery and is published. A ref that is deleted and created again
+// is observed first again.
+func TestIntegrationsHealth_FirstObservation(t *testing.T) {
+	t.Run("ok first is not published, a recovery is", func(t *testing.T) {
+		r, in := newIntegRig(t, nil)
+		s := r.buildLoaded(in)
+		if _, err := s.registry.Put(integAdmin(), integSignalConfig(0), integPassword("riddle-me-this")); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.probeAll(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if got := r.healthFence(); len(got) != 0 {
+			t.Fatalf("a first observation of ok was published: %v", healthStatuses(got))
+		}
+		r.setSignalHealth(integrations.HealthDown)
+		_ = s.probeAll(context.Background())
+		r.setSignalHealth(integrations.HealthOK)
+		_ = s.probeAll(context.Background())
+		if got := healthStatuses(r.healthFence()); !slices.Equal(got, []string{"down", "ok"}) {
+			t.Fatalf("published %v, want the move to down and the recovery to ok", got)
+		}
+	})
+	t.Run("not ok first is published", func(t *testing.T) {
+		r, in := newIntegRig(t, nil)
+		s := r.buildLoaded(in)
+		r.setSignalHealth(integrations.HealthDown)
+		if _, err := s.registry.Put(integAdmin(), integSignalConfig(0), integPassword("riddle-me-this")); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.probeAll(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if got := healthStatuses(r.healthFence()); !slices.Equal(got, []string{"down"}) {
+			t.Fatalf("published %v, want the first observation, down", got)
+		}
+	})
+	t.Run("a recreated ref is observed first again", func(t *testing.T) {
+		r, in := newIntegRig(t, nil)
+		s := r.buildLoaded(in)
+		r.setSignalHealth(integrations.HealthDown)
+		put := func() {
+			t.Helper()
+			if _, err := s.registry.Put(integAdmin(), integSignalConfig(0), integPassword("riddle-me-this")); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.probeAll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		put()
+		if err := s.registry.Delete(integAdmin(), integSignalRef); err != nil {
+			t.Fatal(err)
+		}
+		put()
+		if got := healthStatuses(r.healthFence()); !slices.Equal(got, []string{"down", "down"}) {
+			t.Fatalf("published %v, want one first observation per incarnation", got)
+		}
+	})
+}
+
+// TestIntegrationsHealth_PublishesInRecordedOrder: the Registry calls the hook
+// with its health lock held, so two probes of one ref cannot report their
+// statuses in the other order from the one they were recorded in. The first
+// publish is parked inside the hook (the Publisher getter is called there); a
+// second probe with a different status must not reach the hook until the first
+// is released, and the events then arrive in the order recorded.
+func TestIntegrationsHealth_PublishesInRecordedOrder(t *testing.T) {
+	r, in := newIntegRig(t, nil)
+	var (
+		calls   atomic.Int32
+		entered = make(chan struct{})
+		release = make(chan struct{})
+		once    sync.Once
+	)
+	unpark := func() { once.Do(func() { close(release) }) }
+	in.Publisher = func() events.Publisher {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
+		return r.bus
+	}
+	s := r.buildLoaded(in)
+	t.Cleanup(unpark) // before the build's own close: a failing run must not leave a probe parked under the health lock
+	if _, err := s.registry.Put(integAdmin(), integSignalConfig(0), integPassword("riddle-me-this")); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	probe := func() chan struct{} {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = s.registry.Health(ctx, integSignalRef)
+		}()
+		return done
+	}
+
+	r.setSignalHealth(integrations.HealthDown) // the first observation: published, parked in the hook
+	first := probe()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first probe never reached the hook")
+	}
+	r.setSignalHealth(integrations.HealthDegraded) // a move: must wait behind the parked hook
+	second := probe()
+	time.Sleep(200 * time.Millisecond)
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("%d hook calls while the first was parked, want 1: a second probe reported past the first", n)
+	}
+	unpark()
+	for _, d := range []chan struct{}{first, second} {
+		select {
+		case <-d:
+		case <-time.After(5 * time.Second):
+			t.Fatal("a probe never finished")
+		}
+	}
+	if got := healthStatuses(r.healthFence()); !slices.Equal(got, []string{"down", "degraded"}) {
+		t.Fatalf("published %v, want the recorded order [down degraded]", got)
+	}
+}
+
+// TestIntegrationsHealth_ConcurrentProbesNeverRepeatAStatus: many concurrent
+// probes of one flapping instance. Each published event is a move from the
+// one before it, because the moves are published in the order the Registry
+// recorded them; a reordered pair would leave two adjacent events with the same
+// status. Run under -race.
+func TestIntegrationsHealth_ConcurrentProbesNeverRepeatAStatus(t *testing.T) {
+	r, in := newIntegRig(t, nil)
+	s := r.buildLoaded(in)
+	if _, err := s.registry.Put(integAdmin(), integSignalConfig(0), integPassword("riddle-me-this")); err != nil {
+		t.Fatal(err)
+	}
+	var n atomic.Int64
+	r.mu.Lock()
+	r.signalHC = func(context.Context, *integrationstest.FakeInstance) integrations.Health {
+		if n.Add(1)%2 == 0 {
+			return integrations.Health{Status: integrations.HealthOK}
+		}
+		return integrations.Health{Status: integrations.HealthDown}
+	}
+	r.mu.Unlock()
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			for range 40 {
+				_, _ = s.registry.Health(context.Background(), integSignalRef)
+			}
+		})
+	}
+	wg.Wait()
+	got := healthStatuses(r.healthFence())
+	if len(got) < 2 {
+		t.Fatalf("only %d health events from 320 flapping probes: %v", len(got), got)
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i] == got[i-1] {
+			t.Fatalf("events %d and %d both report %q: published out of the recorded order (%v)", i-1, i, got[i], got)
+		}
 	}
 }
 

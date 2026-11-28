@@ -146,10 +146,19 @@ type Options struct {
 	// called after a Delete commits, so a re-created ref starts clean; a
 	// failure is logged, never returned. nil = none.
 	Forget func(ctx context.Context, ref Ref) error
-	// HealthChanged is called when a probe changes an instance's status:
-	// the kernel publishes core.integration.health.changed.v1 from it
-	// (M1.4 step 5). nil = none.
-	HealthChanged func(ref Ref, h Health)
+	// HealthChanged is called when a probe changes an instance's status, and
+	// for the first status observed of an instance (first is true then; a ref
+	// deleted and created again is observed first again, because Delete drops
+	// its last health): the kernel publishes
+	// core.integration.health.changed.v1 from it (M1.4 step 5).
+	//
+	// It is called with the Registry's health lock held, so the calls for one
+	// ref arrive in the order their statuses were recorded and two concurrent
+	// probes cannot publish them the other way round. The price is the
+	// contract: it must not block, and it must not call back into the Registry
+	// (Health, ProbeAll), which would deadlock. Probed is called outside the
+	// lock. nil = none.
+	HealthChanged func(ref Ref, h Health, first bool)
 	// Probed is called after every probe of an instance, whether or not the
 	// status moved: HealthChanged fires only on a move, so a consumer that
 	// must act on a repeated answer (the ai router clearing a transient

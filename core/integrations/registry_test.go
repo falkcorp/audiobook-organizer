@@ -560,7 +560,7 @@ func TestRegistry_LifecycleEdges(t *testing.T) {
 	e := newEnv(t)
 	var changes []integrations.HealthStatus
 	r := e.registry(t, nil, func(o *integrations.Options) {
-		o.HealthChanged = func(_ integrations.Ref, h integrations.Health) { changes = append(changes, h.Status) }
+		o.HealthChanged = func(_ integrations.Ref, h integrations.Health, _ bool) { changes = append(changes, h.Status) }
 	})
 	nowhere := integrations.Ref{Kind: integrations.KindNotify, Instance: "nowhere"}
 	if _, ok := r.Config(nowhere); ok {

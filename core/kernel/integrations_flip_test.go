@@ -70,7 +70,7 @@ func TestIntegrationsTopicSpecs(t *testing.T) {
 		t.Fatalf("health topic = %q", h.Name)
 	}
 	if h.Durable != nil {
-		t.Error("the health topic is durable; a missed move is re-observed by the next probe")
+		t.Error("the health topic is durable; it is a bus-only nudge; a missed move is not made up and Health is the state")
 	}
 	if got := h.Permission.String(); got != "core:integrations.read" {
 		t.Errorf("health permission = %s", got)
