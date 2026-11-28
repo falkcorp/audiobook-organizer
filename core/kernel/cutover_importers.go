@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -427,6 +428,22 @@ func (t lateTasks) RenameKind(ctx context.Context, b *storage.Batch, from, to ta
 		return "", err
 	}
 	return imp.RenameKind(ctx, b, from, to, cursor, limit)
+}
+
+// StampView forwards tasks.ViewStamper (m4 finds it by type assertion, as it
+// finds Get): the native importer records the View rule of an imported kind in
+// its definition snapshot. It refuses with module.ErrImporterNotBound until
+// bindNative ran, and when the bound importer cannot stamp.
+func (t lateTasks) StampView(ctx context.Context, b *storage.Batch, k tasks.Kind, v tasks.KindView) error {
+	imp, err := t.get()
+	if err != nil {
+		return err
+	}
+	st, ok := imp.(tasks.ViewStamper)
+	if !ok {
+		return fmt.Errorf("kernel: the bound tasks importer %T cannot record a kind's View rule", imp)
+	}
+	return st.StampView(ctx, b, k, v)
 }
 
 // Get reads a run the native store holds, committed by an earlier chunk of the

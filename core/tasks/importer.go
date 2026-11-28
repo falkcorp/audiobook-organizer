@@ -8,6 +8,7 @@ package tasks
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/internal/taskstore"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -191,6 +193,52 @@ func (im *nativeImporter) Debounce(ctx context.Context, b *storage.Batch, d Debo
 // Stamp implements Importer.Stamp.
 func (im *nativeImporter) Stamp(_ context.Context, b *storage.Batch, subject entity.Ref, k Kind, at time.Time) error {
 	return stageStamp(im.st, b, subject, k, at)
+}
+
+// KindView is the View rule the runs of a kind are read under: the zero value
+// is "unrestricted" (Perms.View omitted, so core:tasks.view); a non-zero
+// Requires is the requirement a reader must satisfy.
+type KindView struct {
+	Requires rbac.Requirement
+}
+
+// ViewStamper is the optional Importer extension that records a kind's View
+// rule in its definition snapshot (def/<kind>), for the runs an import carries
+// over for a kind the build has no live definition for. The executor reads a
+// run of such a kind under the rule its snapshot recorded and hides it from
+// every caller when none is recorded (05-tasks 5T.3.11, F5-18 reach R3), so an
+// app's cutover that imports runs of a kind it does not register records the
+// rule HEAD applied to them here. The native importer implements it; an app
+// finds it by type assertion, as it finds RunReader. Importer is not widened.
+//
+// StampView writes the snapshot unconditionally, with the same bytes for the
+// same rule, so several shards stamping one kind agree and a resumed step
+// rewrites what it wrote. A registered kind's snapshot is rewritten by the
+// kernel's next upsert (the bytes differ), so a stamp for a kind that is
+// registered is harmless and a stamp is never the rule of a live kind.
+type ViewStamper interface {
+	StampView(ctx context.Context, b *storage.Batch, k Kind, v KindView) error
+}
+
+// ErrViewNotRecordable is StampView's refusal of a requirement the snapshot
+// cannot carry.
+var ErrViewNotRecordable = errors.New("tasks: a View requirement the definition snapshot cannot record")
+
+var _ ViewStamper = (*nativeImporter)(nil)
+
+// StampView implements ViewStamper. A requirement a snapshot cannot carry (a
+// legacy atom, a delegated requirement) is refused: recording it would close
+// the kind to everyone without anyone having said so.
+func (im *nativeImporter) StampView(_ context.Context, b *storage.Batch, k Kind, v KindView) error {
+	view := taskstore.EncodeView(v.Requires)
+	if !v.Requires.IsZero() && view.Kind == "unsatisfiable" {
+		return fmt.Errorf("%w: StampView %s: the requirement %s cannot be recorded in a snapshot", ErrViewNotRecordable, k, v.Requires)
+	}
+	raw, err := json.Marshal(taskstore.DefSnapshot{V: taskstore.DefSnapshotVersion, Title: string(k), View: &view})
+	if err != nil {
+		return err
+	}
+	return im.st.Set(b, taskstore.DefKey(string(k)), raw)
 }
 
 // The phases of RenameKind, in the order it walks them.
