@@ -147,12 +147,8 @@ func openUserStateStore(ctx context.Context) (userStateStore, func() error, erro
 	if err != nil {
 		return nil, nil, err
 	}
-	done, err := o.DataMigrationDone(ctx, cutover.IdentityCutoverID)
-	if err != nil {
+	if err := requireIdentityCutover(ctx, o); err != nil {
 		return nil, nil, errors.Join(err, o.Close())
-	}
-	if !done {
-		return nil, nil, errors.Join(errStoreUnmigrated, o.Close())
 	}
 	h, err := o.Storage(books.ID)
 	if err != nil {
@@ -164,6 +160,25 @@ func openUserStateStore(ctx context.Context) (userStateStore, func() error, erro
 	}
 	store.SetUserDirectory(legacyauth.UserDirectory(o))
 	return store, func() error { return errors.Join(store.Close(), o.Close()) }, nil
+}
+
+// requireIdentityCutover refuses a store the identity cutover (M3) has not
+// run on: errStoreUnmigrated when its data migration is not done, the read's
+// error when the state cannot be read. Through app.OpenOffline it is a second
+// line: the offline guard already refuses a store with the cutover pending
+// (storage.OfflinePendingError, which storeUnmigrated also reads), and a store
+// opened with the flip's spec has no other way to have it not done.
+func requireIdentityCutover(ctx context.Context, o interface {
+	DataMigrationDone(ctx context.Context, id string) (bool, error)
+}) error {
+	done, err := o.DataMigrationDone(ctx, cutover.IdentityCutoverID)
+	if err != nil {
+		return err
+	}
+	if !done {
+		return errStoreUnmigrated
+	}
+	return nil
 }
 
 // errStoreUnmigrated: the identity cutover has not run on the store.
