@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 	"github.com/falkcorp/audiobook-organizer/internal/books/writer/writertest"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -69,8 +70,14 @@ func (h *g5TestHost) InvalidateAuthorsCache() { h.invalidate.Add(1) }
 
 func g5Fixture(t *testing.T) (*database.PebbleStore, *g5TestHost, string) {
 	t.Helper()
-	s, id := g2Fixture(t)
-	return s, &g5TestHost{s: s, root: t.TempDir()}, id
+	// dbtest.NewStore returns only once memdb is serving. g2Fixture's raw
+	// NewPebbleStoreInMemory starts the warmup asynchronously, so a lookup that
+	// needs memdb (the book_file ownership one) failed closed in 9 of 30 runs.
+	s := dbtest.NewStore(t)
+	hash := "fhash-halloween"
+	b, err := s.CreateBook(&database.Book{Title: "The Long Halloween", FilePath: "/lib/The Long Halloween/part1.m4b", FileHash: &hash})
+	require.NoError(t, err)
+	return s, &g5TestHost{s: s, root: t.TempDir()}, b.ID
 }
 
 // g5Calls is one call of every method of t6g5Writer. The calls name a book that
@@ -305,9 +312,16 @@ func TestBooksT6G5Store_HostAccessorsAndNilStores(t *testing.T) {
 	b, err := st.GetBookByID(id)
 	require.NoError(t, err)
 	require.Equal(t, "The Long Halloween", b.Title)
+	// No row names the path yet: the strict lookup answers "none", not an
+	// incomplete-lookup error, once memdb serves.
 	rows, err := st.BookFileRowsAtPathStrict("/lib/The Long Halloween/part1.m4b")
 	require.NoError(t, err)
-	require.NotNil(t, rows == nil || len(rows) >= 0)
+	require.Empty(t, rows)
+	require.NoError(t, s.CreateBookFile(&database.BookFile{BookID: id, FilePath: "/lib/The Long Halloween/part1.m4b"}))
+	rows, err = st.BookFileRowsAtPathStrict("/lib/The Long Halloween/part1.m4b")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, id, rows[0].BookID)
 	_, err = st.GetBookFilesIncludingRetired(id)
 	require.NoError(t, err)
 	_, err = st.GetAllBookFilesCoreIncludingRetired()
