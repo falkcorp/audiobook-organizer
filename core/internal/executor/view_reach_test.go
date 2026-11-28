@@ -339,28 +339,28 @@ func TestMayView_RegisteredKindIgnoresItsSnapshot(t *testing.T) {
 }
 
 // TestDefSnapshot_RoundTripsEveryView: what EncodeDefSnapshot records,
-// decodeView reads back, for each requirement a definition can carry.
+// taskstore.DecodeView reads back, for each requirement a definition can carry.
 func TestDefSnapshot_RoundTripsEveryView(t *testing.T) {
 	cells := []struct {
 		name  string
 		view  rbac.Requirement
-		state viewState
+		state taskstore.ViewState
 		req   string
 	}{
-		{"omitted", rbac.Requirement{}, viewDefault, ""},
-		{"need", rbac.Need(scopeSettings), viewRequires, "gotham:settings"},
-		{"all of two", rbac.AllOf(scopeSettings, "gotham:run"), viewRequires, "all(gotham:settings,gotham:run)"},
-		{"any of two", rbac.AnyOf(scopeSettings, "gotham:run"), viewRequires, "any(gotham:settings,gotham:run)"},
-		{"authenticated", rbac.AnyAuthenticated, viewRequires, "authenticated"},
-		{"public", rbac.Public, viewRequires, "public"},
-		{"legacy atom (no checker satisfies it)", rbac.LegacyAtom("library.view"), viewRequires, "invalid"},
+		{"omitted", rbac.Requirement{}, taskstore.ViewDefault, ""},
+		{"need", rbac.Need(scopeSettings), taskstore.ViewRequires, "gotham:settings"},
+		{"all of two", rbac.AllOf(scopeSettings, "gotham:run"), taskstore.ViewRequires, "all(gotham:settings,gotham:run)"},
+		{"any of two", rbac.AnyOf(scopeSettings, "gotham:run"), taskstore.ViewRequires, "any(gotham:settings,gotham:run)"},
+		{"authenticated", rbac.AnyAuthenticated, taskstore.ViewRequires, "authenticated"},
+		{"public", rbac.Public, taskstore.ViewRequires, "public"},
+		{"legacy atom (no checker satisfies it)", rbac.LegacyAtom("library.view"), taskstore.ViewRequires, "invalid"},
 	}
 	for _, c := range cells {
 		t.Run(c.name, func(t *testing.T) {
 			raw := snapshotOfDef(t, taskDef("gotham.x", okBody, withView(c.view)))
-			req, st := decodeView(raw)
-			if st != c.state || (st == viewRequires && req.String() != c.req) {
-				t.Fatalf("decodeView(%s) = %s, %v; want %v, %s", raw, req, st, c.state, c.req)
+			req, st := taskstore.DecodeView(raw)
+			if st != c.state || (st == taskstore.ViewRequires && req.String() != c.req) {
+				t.Fatalf("DecodeView(%s) = %s, %v; want %v, %s", raw, req, st, c.state, c.req)
 			}
 		})
 	}

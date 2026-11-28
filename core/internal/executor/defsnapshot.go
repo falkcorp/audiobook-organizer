@@ -14,143 +14,13 @@ import (
 	"github.com/falkcorp/mediacore/tasks"
 )
 
-// defSnapshotVersion is the version of a definition snapshot's value
-// (def/<kind>, 5T.3.11). Version 2 added View.
-//
-// The rule for a run of a kind with no registered definition (a retired
-// fixer, a kind an M4 import carried over before its module registers it, a
-// disabled module's kind) is: the run is as viewable as its kind's last
-// registered definition said, and a kind whose snapshot cannot say is not
-// viewable by anyone but a kernel-internal caller. The three outcomes of
-// storedView are kept apart on purpose.
-//
-//   - viewDefault: the snapshot has a View record saying "no restriction", so
-//     the kind took Perms.View's default (core:tasks.view). This is an explicit
-//     record, never an absent field.
-//   - viewRequires: the snapshot recorded the View requirement.
-//   - viewUnknown: there is no snapshot, it does not decode, it predates View
-//     (version < 2: its writer never recorded one, so "unrestricted" cannot be
-//     told from "restricted"), it names a View kind this build does not know, or
-//     the store could not be read. Fail closed.
-//
-// Rows written before this change are version 1 and so viewUnknown if their
-// kind is not registered now. That costs nothing for a registered kind: its
-// live definition decides, and the next boot's upsert rewrites its snapshot at
-// version 2 (kernel.upsertDefinitions compares bytes). The kinds at prod are
-// core's own and all registered.
-const defSnapshotVersion = 2
-
-// viewState is how much a stored snapshot says about who may view a kind's runs.
-type viewState uint8
-
-const (
-	// viewUnknown: no usable record. Closed.
-	viewUnknown viewState = iota
-	// viewDefault: recorded as unrestricted (Perms.View omitted).
-	viewDefault
-	// viewRequires: recorded with an explicit requirement.
-	viewRequires
-)
-
-// The View record's kinds.
-const (
-	viewRecDefault       = "default"
-	viewRecAllOf         = "all_of"
-	viewRecAnyOf         = "any_of"
-	viewRecPublic        = "public"
-	viewRecAuthenticated = "authenticated"
-	// viewRecUnsatisfiable is a requirement the snapshot cannot carry (a
-	// legacy atom or a delegated requirement): no checker satisfies one, so the
-	// live rule is "nobody" and so is the stored one.
-	viewRecUnsatisfiable = "unsatisfiable"
-)
-
-// defView is the View field of a snapshot.
-type defView struct {
-	Kind  string   `json:"kind"`
-	Perms []string `json:"perms,omitempty"`
-}
-
-// defSnapshot is a definition's stored snapshot. The kind is the key only,
-// never in the value, because Importer.RenameKind moves the snapshot as bytes
-// (taskstore.DefKey). View is a pointer so that a version-1 value, which has
-// none, is told from a version-2 value that records "default".
-type defSnapshot struct {
-	V     int      `json:"v"`
-	Shape string   `json:"shape"`
-	Title string   `json:"title"`
-	Help  string   `json:"help,omitempty"`
-	View  *defView `json:"view,omitempty"`
-}
-
 // EncodeDefSnapshot is d's snapshot value, for the kernel's upsert. View is
-// always recorded, so an upsert over a version-1 row rewrites it.
+// always recorded, so an upsert over a version-1 row rewrites it. The codec is
+// taskstore's (DefSnapshot, EncodeView, DecodeView).
 func EncodeDefSnapshot(d tasks.Definition) ([]byte, error) {
 	c := tasks.CommonOf(d)
-	v := encodeView(c.Perms.View)
-	return json.Marshal(defSnapshot{V: defSnapshotVersion, Shape: d.Shape().String(), Title: c.Title, Help: c.Help, View: &v})
-}
-
-// encodeView records r from its Kind and Permissions, never from String().
-func encodeView(r rbac.Requirement) defView {
-	if r.IsZero() {
-		return defView{Kind: viewRecDefault}
-	}
-	perms := func() []string {
-		ps := r.Permissions()
-		out := make([]string, len(ps))
-		for i, p := range ps {
-			out[i] = string(p)
-		}
-		return out
-	}
-	switch r.Kind() {
-	case rbac.KindAllOf:
-		return defView{Kind: viewRecAllOf, Perms: perms()}
-	case rbac.KindAnyOf:
-		return defView{Kind: viewRecAnyOf, Perms: perms()}
-	case rbac.KindPublic:
-		return defView{Kind: viewRecPublic}
-	case rbac.KindAuthenticated:
-		return defView{Kind: viewRecAuthenticated}
-	default:
-		return defView{Kind: viewRecUnsatisfiable}
-	}
-}
-
-// decodeView is a snapshot value's View, or viewUnknown. It never returns a
-// requirement it did not rebuild whole: a malformed one (rbac.AllOf of no or a
-// bad scope is the zero Requirement) is viewUnknown, not "anyone".
-func decodeView(raw []byte) (rbac.Requirement, viewState) {
-	var s defSnapshot
-	if err := json.Unmarshal(raw, &s); err != nil || s.V < defSnapshotVersion || s.View == nil {
-		return rbac.Requirement{}, viewUnknown
-	}
-	perms := make([]rbac.Permission, len(s.View.Perms))
-	for i, p := range s.View.Perms {
-		perms[i] = rbac.Permission(p)
-	}
-	var r rbac.Requirement
-	switch s.View.Kind {
-	case viewRecDefault:
-		return rbac.Requirement{}, viewDefault
-	case viewRecAllOf:
-		r = rbac.AllOf(perms...)
-	case viewRecAnyOf:
-		r = rbac.AnyOf(perms...)
-	case viewRecPublic:
-		r = rbac.Public
-	case viewRecAuthenticated:
-		r = rbac.AnyAuthenticated
-	case viewRecUnsatisfiable:
-		return rbac.Requirement{}, viewRequires // the zero requirement, which Satisfies refuses (see mayView)
-	default:
-		return rbac.Requirement{}, viewUnknown
-	}
-	if r.IsZero() {
-		return rbac.Requirement{}, viewUnknown
-	}
-	return r, viewRequires
+	v := taskstore.EncodeView(c.Perms.View)
+	return json.Marshal(taskstore.DefSnapshot{V: taskstore.DefSnapshotVersion, Shape: d.Shape().String(), Title: c.Title, Help: c.Help, View: &v})
 }
 
 // reasonNoViewSnapshot is the log reason for a kind whose runs are hidden
@@ -159,21 +29,21 @@ const reasonNoViewSnapshot = "no view snapshot"
 
 // storedView is the View rule kind's snapshot records. A store that cannot be
 // read (the error is returned beside it), and an executor built with no
-// Options.Keyspace (no snapshot is reachable), answer viewUnknown.
-func (e *executor) storedView(ctx context.Context, kind tasks.Kind) (rbac.Requirement, viewState, error) {
+// Options.Keyspace (no snapshot is reachable), answer taskstore.ViewUnknown.
+func (e *executor) storedView(ctx context.Context, kind tasks.Kind) (rbac.Requirement, taskstore.ViewState, error) {
 	if e.idem == nil {
-		return rbac.Requirement{}, viewUnknown, nil
+		return rbac.Requirement{}, taskstore.ViewUnknown, nil
 	}
 	raw, found, err := e.idem.Get(ctx, taskstore.DefKey(string(kind)))
 	if err != nil {
 		e.ins.undecodable("definition_snapshot")
-		return rbac.Requirement{}, viewUnknown, err
+		return rbac.Requirement{}, taskstore.ViewUnknown, err
 	}
 	if !found {
-		return rbac.Requirement{}, viewUnknown, nil
+		return rbac.Requirement{}, taskstore.ViewUnknown, nil
 	}
-	r, st := decodeView(raw)
-	if st == viewUnknown {
+	r, st := taskstore.DecodeView(raw)
+	if st == taskstore.ViewUnknown {
 		e.ins.undecodable("definition_snapshot")
 	}
 	return r, st, nil
@@ -200,7 +70,7 @@ func (e *executor) viewer(ctx context.Context, who rbac.Checker) *viewer {
 // module's own client read their own module's kinds first; then the live
 // definition's View (omitted: core:tasks.view); a kind with no live definition
 // takes the rule its snapshot recorded, and closed when the snapshot says
-// nothing usable (defSnapshotVersion).
+// nothing usable (taskstore.DefSnapshotVersion).
 func (v *viewer) may(kind tasks.Kind) bool {
 	if v.who == nil {
 		return true
@@ -225,9 +95,9 @@ func (v *viewer) decide(kind tasks.Kind) bool {
 	}
 	req, st, err := v.e.storedView(v.ctx, kind)
 	switch st {
-	case viewDefault:
+	case taskstore.ViewDefault:
 		return v.who.Has(scopeTasksView)
-	case viewRequires:
+	case taskstore.ViewRequires:
 		if req.IsZero() {
 			return false // a recorded requirement no checker satisfies
 		}
