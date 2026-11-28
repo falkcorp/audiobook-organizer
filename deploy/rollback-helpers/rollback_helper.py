@@ -184,7 +184,11 @@ Operations (the stub name, then the subcommand):
                      nothing changed: it says to list, and keeps the request.
 
 Exit 0 done; 1 refused or failed (the message says which step); 2 bad
-arguments. Standard library only. Tests: scripts/tests/test_rollback_helper.py.
+arguments; 4 cutover-blockers-apply refused before its unit started (nothing ran,
+nothing changed; one NOT-RUN line on stdout). Every such refusal exits 4, the
+wrong-arity one too (usage, which exits 2 for every other op, cutover-blockers-list
+included); a failure after the unit started exits 1 and keeps the request. Standard
+library only. Tests: scripts/tests/test_rollback_helper.py.
 Install: docs/system/deploy-and-gpu-ops.md ("Rollback helpers").
 """
 

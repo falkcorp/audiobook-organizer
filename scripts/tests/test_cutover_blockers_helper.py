@@ -616,6 +616,15 @@ class Blockers(unittest.TestCase):
         self.assertEqual(self.systemd_runs(), [])
         self.assertTrue(self.request.exists())
 
+    def test_the_module_documents_exit_status_4_and_the_arity_exception(self):
+        doc = self.h.mod.__doc__
+        self.assertIn("4 cutover-blockers-apply refused before its unit started", doc)
+        self.assertIn("NOT-RUN", doc)
+        self.assertIn("wrong-arity one too", doc)
+        # What it documents is what it does: apply's usage refusal is 4, list's is 2.
+        self.refused("cutover-blockers-apply", "x", contains="usage")
+        self.refused("cutover-blockers-list", "x", code=2, contains="usage")
+
     def test_every_refusal_before_the_unit_starts_says_not_run_and_none_after_does(self):
         # Before: exit status 4 and one NOT-RUN line, nothing else on stdout.
         self.put_request(b"{not json")
