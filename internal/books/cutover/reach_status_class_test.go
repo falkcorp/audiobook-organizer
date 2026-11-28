@@ -7,9 +7,12 @@ package cutover_test
 
 import (
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 )
 
 // The status-class half of the reach oracle (F4-08 fix-forward).
@@ -197,5 +200,44 @@ func TestRecordedPrincipalsAreTheRecording(t *testing.T) {
 		if !slices.Contains(recordedPrincipals, name) {
 			t.Errorf("logoutAnswers200 names %q, which verdicts.json does not record", name)
 		}
+	}
+}
+
+// TestRecordedEnvironment_RestoresTheGlobalsItChanges: the environment a boot of the
+// oracle is put in (no fingerprint backend, the stubbed network) changes three process
+// globals (PATH, the resolved fpcalc path, http.DefaultTransport) and must leave all of
+// them as the next test finds them, whatever the boot itself set in between. Not parallel:
+// it owns those globals for its duration.
+func TestRecordedEnvironment_RestoresTheGlobalsItChanges(t *testing.T) {
+	wantPath, hadPath := os.LookupEnv("PATH")
+	transport := http.DefaultTransport
+	prev := fingerprint.ResolvedFpcalcPath()
+	fingerprint.SetResolvedFpcalcPath("/opt/gotham/fpcalc")
+	t.Cleanup(func() { fingerprint.SetResolvedFpcalcPath(prev) })
+
+	t.Run("boot", func(t *testing.T) {
+		recordedEnvironment(t)
+		if got := fingerprint.ResolvedFpcalcPath(); got != "" {
+			t.Errorf("inside, the resolved fpcalc path is %q, want it cleared", got)
+		}
+		if http.DefaultTransport == transport {
+			t.Error("inside, http.DefaultTransport is still the real one")
+		}
+		// What the boot does (server.go): set the path, then the owner boots swap the
+		// transport again; both must unwind to what was there before the test.
+		fingerprint.SetResolvedFpcalcPath("/opt/gotham/other-fpcalc")
+		outer := http.DefaultTransport
+		http.DefaultTransport = http.DefaultTransport.(*http.Transport).Clone()
+		t.Cleanup(func() { http.DefaultTransport = outer })
+	})
+
+	if got := fingerprint.ResolvedFpcalcPath(); got != "/opt/gotham/fpcalc" {
+		t.Errorf("after, the resolved fpcalc path is %q, want the one before", got)
+	}
+	if http.DefaultTransport != transport {
+		t.Error("after, http.DefaultTransport is not the one before")
+	}
+	if got, ok := os.LookupEnv("PATH"); got != wantPath || ok != hadPath {
+		t.Errorf("after, PATH is %q (set %v), want %q (set %v)", got, ok, wantPath, hadPath)
 	}
 }
