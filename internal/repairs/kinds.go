@@ -150,10 +150,14 @@ type candidate struct {
 }
 
 // definition builds the tasks.Fixer for the kind.
-func (k *repairKind) definition() tasks.Definition {
+func (k *repairKind) definition() tasks.Definition { return k.definitionOf(k.common()) }
+
+// definitionOf is definition over c, so a test can run the kind with a timeout
+// of its own and stop a run by it.
+func (k *repairKind) definitionOf(c tasks.Common) tasks.Definition {
 	f := k.f
 	return tasks.Fixer(tasks.Kind(KindPrefix+f.ID()), tasks.FixerSpec[json.RawMessage, candidate]{
-		Common:      k.common(),
+		Common:      c,
 		Candidates:  k.candidates,
 		Load:        k.load,
 		Evaluate:    k.evaluate,
