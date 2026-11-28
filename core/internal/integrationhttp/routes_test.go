@@ -253,7 +253,7 @@ func TestIntegrationHTTP_WritesNeedIntegrationsManage(t *testing.T) {
 
 func TestIntegrationHTTP_InstanceTestChangedOriginSendsNoStoredSecret(t *testing.T) {
 	e := newEnv(t)
-	ctx := managerCtx()
+	ctx := adminCtx()
 	e.create(t, ctx, kindNotify, signalBody(roofID, "http://192.0.2.20/", "alfred-1"))
 	const stored, moved = "http://192.0.2.20/", "http://192.0.2.99/"
 
@@ -292,7 +292,7 @@ func TestIntegrationHTTP_InstanceTestChangedOriginSendsNoStoredSecret(t *testing
 
 func TestIntegrationHTTP_UnscopedTestUsesOnlyBody(t *testing.T) {
 	e := newEnv(t)
-	ctx := managerCtx()
+	ctx := adminCtx()
 	e.create(t, ctx, kindNotify, signalBody(roofID, "http://192.0.2.20/", "alfred-1"))
 
 	// Naming the stored instance in the body does not scope the test.
@@ -380,7 +380,7 @@ func TestIntegrationHTTP_NoSecretInResponses(t *testing.T) {
 
 func TestIntegrationHTTP_EchoedMaskKeepsStoredSecret(t *testing.T) {
 	e := newEnv(t)
-	ctx := managerCtx()
+	ctx := adminCtx()
 	e.create(t, ctx, kindNotify, signalBody(roofID, "http://192.0.2.20/", "alfred-1"))
 	for _, echo := range []string{"", "********", "[REDACTED]", `{"secret":"integrations.notify.gcpd-roof.password"}`} {
 		body := signalBody("", "http://192.0.2.20/", "")
@@ -399,7 +399,7 @@ func TestIntegrationHTTP_EchoedMaskKeepsStoredSecret(t *testing.T) {
 
 func TestIntegrationHTTP_StatusesFollowM1_5(t *testing.T) {
 	e := newEnv(t)
-	ctx := managerCtx()
+	ctx := adminCtx()
 
 	t.Run("422 nothing written", func(t *testing.T) {
 		bad := signalBody("joker", "http://192.0.2.20/", "")
@@ -1170,7 +1170,7 @@ func TestInstanceView_NeverEmitsSecretShapedSettings(t *testing.T) {
 
 func TestIntegrationHTTP_ReplaceRules(t *testing.T) {
 	e := newEnv(t)
-	ctx := managerCtx()
+	ctx := adminCtx()
 	created := e.create(t, ctx, kindNotify, signalBody(roofID, "http://192.0.2.20/", "alfred-1"))
 
 	t.Run("validation", func(t *testing.T) {
@@ -1238,7 +1238,7 @@ func TestIntegrationHTTP_ReplaceRules(t *testing.T) {
 
 func TestIntegrationHTTP_CreateLocationAndConflict(t *testing.T) {
 	e := newEnv(t)
-	ctx := managerCtx()
+	ctx := adminCtx()
 	req := createReq{Kind: kindNotify, Body: signalBody(roofID, "http://192.0.2.20/", "alfred-1")}
 	got, err := e.api.createInstance(ctx, in(ctx, req))
 	if err != nil {
@@ -1317,7 +1317,7 @@ func TestIntegrationHTTP_BodyValidation(t *testing.T) {
 
 func TestIntegrationHTTP_LimitsRoundTrip(t *testing.T) {
 	e := newEnv(t)
-	ctx := managerCtx()
+	ctx := adminCtx()
 	limits := &IntegrationLimits{
 		RPS: 2.5, Burst: 4, MaxRetries: 3, Timeout: "3s", RetryAfterMax: "5m0s",
 		Daily:   &IntegrationDaily{Total: 100, Background: 40, Zone: "America/New_York", Counters: []string{"query", "grab"}},

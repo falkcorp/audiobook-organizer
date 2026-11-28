@@ -41,8 +41,8 @@ func TestDeluge_PrivateHostNeedsLocal(t *testing.T) {
 	pw := map[string]secrets.Value{"password": secrets.NewValue("alfred-1")}
 	ctx := context.Background()
 
-	// A manager cannot grant Local; the instance's private origin is not trusted.
-	if _, err := h.reg.Put(manager(), inst, pw); err != nil {
+	// The write asks for no Local, so the instance's private origin is not trusted.
+	if _, err := h.reg.Put(admin(), inst, pw); err != nil {
 		t.Fatal(err)
 	}
 	probe := func() {

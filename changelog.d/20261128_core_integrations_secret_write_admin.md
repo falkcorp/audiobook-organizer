@@ -1,0 +1,3 @@
+### Fixed
+
+- Core's integration registry now refuses a write that stores or clears a secret field (an API key, a password, a webhook secret) unless the caller is an interactive administrator, the rule the config write already applies to every secret today. An API key, even one that holds the admin role, and a custom role that holds only the integrations manage permission get a 403; a write that touches no secret, such as a URL, still works for them, and a test of a body-supplied secret still works because it stores nothing. Nothing mounts the registry's routes yet, so no running install changes; this closes a gap before they do.

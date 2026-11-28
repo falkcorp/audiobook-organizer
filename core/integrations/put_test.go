@@ -172,7 +172,7 @@ func TestRegistry_APIKeyCannotSetLocal(t *testing.T) {
 	if _, ok := e.stored(t, signalRef); ok {
 		t.Fatal("the refused Put wrote a row")
 	}
-	got := mustPut(t, apiKey(), r, signal("http://192.0.2.20/"), cred("alfred-1"))
+	got := mustPut(t, apiKey(), r, signal("http://192.0.2.20/"), nil)
 	if got.Origin != integrations.OriginAPI || got.Local {
 		t.Errorf("an API key's write = %+v", got)
 	}
@@ -247,7 +247,7 @@ func TestAuthOff_LocalNotSettable(t *testing.T) {
 	if _, err := r.Put(authOff(), local, nil); !errors.Is(err, integrations.ErrForbidden) {
 		t.Fatalf("auth off setting Local: err = %v", err)
 	}
-	got := mustPut(t, authOff(), r, signal("http://192.0.2.20/"), cred("alfred-1"))
+	got := mustPut(t, authOff(), r, signal("http://192.0.2.20/"), nil)
 	if got.Origin != integrations.OriginUI || got.Local {
 		t.Errorf("an auth-off write = %+v", got)
 	}
