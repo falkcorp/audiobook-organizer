@@ -95,6 +95,7 @@ func gcpdBasicRouter(t *testing.T, assets func(string) bool) (http.Handler, func
 func gcpdBasicRouterBuilt(t *testing.T, assets func(string) bool) (*Router, http.Handler) {
 	t.Helper()
 	r := NewRouter(Options{}, Deps{})
+	wireSignedIn(t, r)
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	for _, p := range []string{"GET /livez", "GET /readyz", "GET /metrics", "GET /build.js"} {
 		r.Infra(p, rbac.Public, ok)
@@ -331,6 +332,7 @@ func TestBasicGate_HEADExemptRules(t *testing.T) {
 
 	t.Run("Router.SPA owns the root", func(t *testing.T) {
 		r := NewRouter(Options{}, Deps{})
+		wireSignedIn(t, r)
 		ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 		r.Infra("GET /livez", rbac.Public, ok)
 		r.Infra("GET /build.js", rbac.Public, ok)

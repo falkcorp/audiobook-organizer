@@ -134,6 +134,7 @@ func manifestOf(routes ...LegacyRoute) func(func(LegacyRoute) bool) {
 func gcpdRouter(t *testing.T, h http.Handler, routes ...LegacyRoute) *Router {
 	t.Helper()
 	r := NewRouter(Options{}, Deps{})
+	wireSignedIn(t, r)
 	for _, c := range []string{"/api/v1/", "/ping"} {
 		if err := r.Claim("gcpd", c); err != nil {
 			t.Fatal(err)
@@ -469,6 +470,7 @@ func TestLegacyManifest_Refusals(t *testing.T) {
 func TestLegacyRedirect_CoversOnlyUnclaimedPaths(t *testing.T) {
 	g := newFakeGin("GET /api/v1/cases")
 	r := NewRouter(Options{}, Deps{})
+	wireSignedIn(t, r)
 	r.CoreGroup()
 	r.ModuleGroup("oracle")
 	if err := r.Claim("gcpd", "/api/v1/"); err != nil {
@@ -579,6 +581,7 @@ func TestDispatch_TrailingSlashPatternNoRedirect(t *testing.T) {
 func TestDispatch_SPASharedGetServesShell(t *testing.T) {
 	g := newFakeGin("POST /login")
 	r := NewRouter(Options{}, Deps{})
+	wireSignedIn(t, r)
 	if err := r.Claim("gcpd", "/login"); err != nil {
 		t.Fatal(err)
 	}
@@ -601,6 +604,7 @@ func TestDispatch_SPASharedGetServesShell(t *testing.T) {
 func fallbackRouter(t *testing.T, g http.Handler, shared []string, observe func(string), routes ...LegacyRoute) http.Handler {
 	t.Helper()
 	r := NewRouter(Options{}, Deps{})
+	wireSignedIn(t, r)
 	r.observe = observe
 	for _, c := range []string{"/files/", "/login/"} {
 		if err := r.Claim("gcpd", c); err != nil {
@@ -680,6 +684,7 @@ func TestFallback_EncodedSlashOnSPASharedNeverRunsALegacyRoute(t *testing.T) {
 // deadlock.
 func TestMountLegacy_IteratorMayReadRouter(t *testing.T) {
 	r := NewRouter(Options{}, Deps{})
+	wireSignedIn(t, r)
 	if err := r.Claim("gcpd", "/files/"); err != nil {
 		t.Fatal(err)
 	}
@@ -708,6 +713,7 @@ func TestLegacyPlace_CoreOnlySegmentsRefused(t *testing.T) {
 	for _, p := range []string{"/v2/x", "/livez", "/readyz", "/assets/app.js", "/static/x", "/ui/x"} {
 		seg := firstSegment(p)
 		r := NewRouter(Options{}, Deps{})
+		wireSignedIn(t, r)
 		if err := r.Claim("gcpd", "/"+seg+"/"); err != nil {
 			t.Fatal(err)
 		}
@@ -722,6 +728,7 @@ func TestLegacyPlace_CoreOnlySegmentsRefused(t *testing.T) {
 	for _, seg := range []string{"auth", "health", "metrics"} {
 		for _, listed := range []bool{false, true} {
 			r := NewRouter(Options{}, Deps{})
+			wireSignedIn(t, r)
 			if err := r.Claim("gcpd", "/"+seg+"/"); err != nil {
 				t.Fatal(err)
 			}
