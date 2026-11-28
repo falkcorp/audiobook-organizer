@@ -17,9 +17,11 @@ import (
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
+	svcmetafetch "github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/acoustid"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/deluge"
@@ -119,6 +121,11 @@ func (listsRuns) Rows(context.Context, tasks.RunID) iter.Seq2[tasks.Row, error] 
 	return func(func(tasks.Row, error) bool) {}
 }
 
+// Get is the one read the authority-build apply makes of the run store.
+func (listsRuns) Get(context.Context, tasks.RunID) (tasks.RunRecord, error) {
+	return tasks.RunRecord{}, tasks.ErrRunNotFound
+}
+
 type listsUpgrader struct{}
 
 func (listsUpgrader) RunUpgrade(context.Context, int, operations.ProgressReporter) (*metabatch.UpgradeResult, error) {
@@ -156,6 +163,18 @@ func listsFixture(t *testing.T) taskListInputs {
 			Ops:       store,
 			G4Host:    listsG4Host{root: root},
 			AuxStores: listsAux{},
+			G1: maintenance.G1Inputs{
+				PlanRuns:   listsRuns{},
+				FetchStore: store,
+				NewFetchService: func(gated svcmetafetch.Store) *svcmetafetch.Service {
+					return svcmetafetch.NewService(gated)
+				},
+				NewTranscriptionRunners: func(*svcmetafetch.Service) maintenance.TranscriptionRunners { return nil },
+				ManualOnly:              applygate.ManualOnlyReaders{Files: store, Series: store, Authors: store, Tags: store},
+				AIJournalRetentionDays:  func() int { return 0 },
+				InvalidateAuthorsCache:  func() {},
+				InvalidateDedupCache:    func() {},
+			},
 			G7: maintenance.G7Inputs{
 				Reads: store, Writes: store,
 				InvalidateSeriesCache: func() {},
@@ -227,13 +246,10 @@ var notYetBuilt = map[tasks.Kind]string{
 	// the dedup plugin's KindDeps builder.
 	"books.dedup.label-refinement": "dedup plugin",
 	"books.dedup.llm-review":       "dedup plugin",
-	// maintenance groups 1 and 5 builders; nightly-compact-activity-log is group 6
-	// (held for TODO-F5-11-HOLD-RENEW).
-	"books.maintenance.author-split-scan":            "maintenance g1/g5",
-	"books.maintenance.metadata-refresh":             "maintenance g1/g5",
-	"books.maintenance.orphan-book-files-cleanup":    "maintenance g1/g5",
-	"books.maintenance.prune-ai-journal":             "maintenance g1/g5",
-	"books.maintenance.resolve-production-authors":   "maintenance g1/g5",
+	// maintenance group 5's builder; the two kinds below are group 6 (held for
+	// TODO-F5-11-HOLD-RENEW; orphan-book-files-cleanup is one of its 14).
+	"books.maintenance.metadata-refresh":             "maintenance g5",
+	"books.maintenance.orphan-book-files-cleanup":    "maintenance g6 (held, TODO-F5-11-HOLD-RENEW)",
 	"books.maintenance.nightly-compact-activity-log": "maintenance g6 (held, TODO-F5-11-HOLD-RENEW)",
 }
 
@@ -404,22 +420,33 @@ func TestF5_BookTaskListsBuild(t *testing.T) {
 // package's inputs, so a nil hook refuses there too.
 func TestF5_MissingMaintenanceInputRefusesByName(t *testing.T) {
 	for name, mutate := range map[string]func(*taskListInputs){
-		"Jobs":                     func(in *taskListInputs) { in.Maintenance.Jobs = nil },
-		"G2Source":                 func(in *taskListInputs) { in.Maintenance.G2Source = nil },
-		"G2Host":                   func(in *taskListInputs) { in.Maintenance.G2Host = nil },
-		"RootDir":                  func(in *taskListInputs) { in.Maintenance.RootDir = nil },
-		"G3Source":                 func(in *taskListInputs) { in.Maintenance.G3Source = nil },
-		"G3Host":                   func(in *taskListInputs) { in.Maintenance.G3Host = nil },
-		"Runs":                     func(in *taskListInputs) { in.Maintenance.Runs = nil },
-		"Ops":                      func(in *taskListInputs) { in.Maintenance.Ops = nil },
-		"G4Host":                   func(in *taskListInputs) { in.Maintenance.G4Host = nil },
-		"AuxStores":                func(in *taskListInputs) { in.Maintenance.AuxStores = nil },
-		"StandDownKey":             func(in *taskListInputs) { in.Maintenance.StandDownKey = "" },
-		"G7.Reads":                 func(in *taskListInputs) { in.Maintenance.G7.Reads = nil },
-		"G7.Writes":                func(in *taskListInputs) { in.Maintenance.G7.Writes = nil },
-		"G7.InvalidateSeriesCache": func(in *taskListInputs) { in.Maintenance.G7.InvalidateSeriesCache = nil },
-		"G7.SupportedExtensions":   func(in *taskListInputs) { in.Maintenance.G7.SupportedExtensions = nil },
-		"Schedules":                func(in *taskListInputs) { in.Schedules = nil },
+		"Jobs":                       func(in *taskListInputs) { in.Maintenance.Jobs = nil },
+		"G2Source":                   func(in *taskListInputs) { in.Maintenance.G2Source = nil },
+		"G2Host":                     func(in *taskListInputs) { in.Maintenance.G2Host = nil },
+		"RootDir":                    func(in *taskListInputs) { in.Maintenance.RootDir = nil },
+		"G3Source":                   func(in *taskListInputs) { in.Maintenance.G3Source = nil },
+		"G3Host":                     func(in *taskListInputs) { in.Maintenance.G3Host = nil },
+		"Runs":                       func(in *taskListInputs) { in.Maintenance.Runs = nil },
+		"Ops":                        func(in *taskListInputs) { in.Maintenance.Ops = nil },
+		"G4Host":                     func(in *taskListInputs) { in.Maintenance.G4Host = nil },
+		"AuxStores":                  func(in *taskListInputs) { in.Maintenance.AuxStores = nil },
+		"StandDownKey":               func(in *taskListInputs) { in.Maintenance.StandDownKey = "" },
+		"G1.PlanRuns":                func(in *taskListInputs) { in.Maintenance.G1.PlanRuns = nil },
+		"G1.FetchStore":              func(in *taskListInputs) { in.Maintenance.G1.FetchStore = nil },
+		"G1.NewFetchService":         func(in *taskListInputs) { in.Maintenance.G1.NewFetchService = nil },
+		"G1.NewTranscriptionRunners": func(in *taskListInputs) { in.Maintenance.G1.NewTranscriptionRunners = nil },
+		"G1.ManualOnly.Files":        func(in *taskListInputs) { in.Maintenance.G1.ManualOnly.Files = nil },
+		"G1.ManualOnly.Series":       func(in *taskListInputs) { in.Maintenance.G1.ManualOnly.Series = nil },
+		"G1.ManualOnly.Authors":      func(in *taskListInputs) { in.Maintenance.G1.ManualOnly.Authors = nil },
+		"G1.ManualOnly.Tags":         func(in *taskListInputs) { in.Maintenance.G1.ManualOnly.Tags = nil },
+		"G1.AIJournalRetentionDays":  func(in *taskListInputs) { in.Maintenance.G1.AIJournalRetentionDays = nil },
+		"G1.InvalidateAuthorsCache":  func(in *taskListInputs) { in.Maintenance.G1.InvalidateAuthorsCache = nil },
+		"G1.InvalidateDedupCache":    func(in *taskListInputs) { in.Maintenance.G1.InvalidateDedupCache = nil },
+		"G7.Reads":                   func(in *taskListInputs) { in.Maintenance.G7.Reads = nil },
+		"G7.Writes":                  func(in *taskListInputs) { in.Maintenance.G7.Writes = nil },
+		"G7.InvalidateSeriesCache":   func(in *taskListInputs) { in.Maintenance.G7.InvalidateSeriesCache = nil },
+		"G7.SupportedExtensions":     func(in *taskListInputs) { in.Maintenance.G7.SupportedExtensions = nil },
+		"Schedules":                  func(in *taskListInputs) { in.Schedules = nil },
 	} {
 		t.Run(name, func(t *testing.T) {
 			in := listsFixture(t)

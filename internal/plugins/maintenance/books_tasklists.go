@@ -23,8 +23,8 @@ import (
 // The lists, and what the flip must still decide about each:
 //
 //   - jobs.Kinds over newJobsDeps (the maintenance jobs).
-//   - t6g2Kinds, t6g3Kinds, t6g4Kinds, t6g7Kinds over newT6G2Deps,
-//     newT6G3Deps, newT6G4Deps, newT6G7Deps.
+//   - t6g1Kinds, t6g2Kinds, t6g3Kinds, t6g4Kinds, t6g7Kinds over newT6G1Deps,
+//     newT6G2Deps, newT6G3Deps, newT6G4Deps, newT6G7Deps.
 //   - auxStoreCompactKindList, the books half of db_optimize.
 //
 // Group 6 is NOT in BooksTaskLists. Its 14 kinds hold a library-scan
@@ -83,6 +83,9 @@ type BooksTaskInputs struct {
 	Scan   ScanController
 	// AuxStores compacts books' separate AI-scan and OpenLibrary stores.
 	AuxStores StoreOptimizer
+	// G1 serves group 1 (the author, activity-index and authority kinds); Ops is
+	// its store and StandDownKey its stand-down key.
+	G1 G1Inputs
 	// G7 serves group 7 (the repair, report and user-merge kinds). Its RootDir
 	// and StandDownKey are the shared ones above, whatever it carries.
 	G7 G7Inputs
@@ -136,6 +139,17 @@ func BooksTaskLists(in BooksTaskInputs) ([]tasks.Definition, error) {
 	n.check("AuxStores", in.AuxStores != nil)
 	n.check("StandDownKey", in.StandDownKey != "")
 	n.check("Schedules", in.Schedules != nil)
+	n.check("G1.PlanRuns", isSet(in.G1.PlanRuns))
+	n.check("G1.FetchStore", isSet(in.G1.FetchStore))
+	n.check("G1.NewFetchService", in.G1.NewFetchService != nil)
+	n.check("G1.NewTranscriptionRunners", in.G1.NewTranscriptionRunners != nil)
+	n.check("G1.ManualOnly.Files", isSet(in.G1.ManualOnly.Files))
+	n.check("G1.ManualOnly.Series", isSet(in.G1.ManualOnly.Series))
+	n.check("G1.ManualOnly.Authors", isSet(in.G1.ManualOnly.Authors))
+	n.check("G1.ManualOnly.Tags", isSet(in.G1.ManualOnly.Tags))
+	n.check("G1.AIJournalRetentionDays", in.G1.AIJournalRetentionDays != nil)
+	n.check("G1.InvalidateAuthorsCache", in.G1.InvalidateAuthorsCache != nil)
+	n.check("G1.InvalidateDedupCache", in.G1.InvalidateDedupCache != nil)
 	n.check("G7.Reads", isSet(in.G7.Reads))
 	n.check("G7.Writes", isSet(in.G7.Writes))
 	n.check("G7.InvalidateSeriesCache", in.G7.InvalidateSeriesCache != nil)
@@ -155,6 +169,12 @@ func BooksTaskLists(in BooksTaskInputs) ([]tasks.Definition, error) {
 		return nil, fmt.Errorf("maintenance jobs: %w", err)
 	}
 	out = append(out, jl...)
+
+	g1, err := newT6G1Deps(in.Ops, in.G1, in.StandDownKey)
+	if err != nil {
+		return nil, fmt.Errorf("maintenance group 1: %w", err)
+	}
+	out = append(out, p.t6g1Kinds(g1, in.Schedules)...)
 
 	out = append(out, p.t6g2Kinds(newT6G2Deps(in.G2Source, in.G2Host, in.RootDir), in.Schedules)...)
 	out = append(out, p.t6g3Kinds(newT6G3Deps(in.G3Source, in.G3Host, in.GuardTags, in.StandDownKey, in.Runs), in.Schedules)...)

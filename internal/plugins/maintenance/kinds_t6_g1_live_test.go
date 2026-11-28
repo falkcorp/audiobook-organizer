@@ -285,7 +285,7 @@ func (p *t6g1LiveProbe) deps(ops OpsStore) t6g1Deps {
 	if ops != nil {
 		hs := t6g1HeadStore{OpsStore: ops}
 		d.Stores = t6g1Stores{
-			PurgeEmpty: hs, AuthorityBuild: ops, AuthorSplit: ops, ResolveProduction: ops,
+			PurgeEmpty: hs, AuthorityBuild: ops, AuthorSplit: hs, ResolveProduction: ops,
 			ConjunctionRepair: hs, DuplicateMerge: hs, IDRepair: hs, PathLink: ops, StripMerge: hs, AutoMatch: ops,
 		}
 		d.ManualOnly = applygate.ManualOnlyReaders{Files: ops, Series: ops, Authors: ops}
