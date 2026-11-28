@@ -102,9 +102,11 @@ func (s *Server) wireAuthRoutes(
 		authProtected.DELETE("/api-keys/:id", apiKeyH.Revoke)
 		// POST /api-keys/:id/rotate was retired by 01-P81k: it answers 410 Gone
 		// for one release (owner decision D9) and is then removed. Create a new
-		// key and revoke the old one instead. The route keeps its credential
-		// guard, so the auth middleware and the refusal of an API key rotating
-		// another user's key still run before the 410.
+		// key and revoke the old one instead. Under core identity the
+		// conditional credential guard is a pass-through (credGuardMiddleware,
+		// since B10g), so the stub answers 410 to every caller and mints
+		// nothing; apiKeyOwnedByAnotherUser is consulted only by the pre-identity
+		// guard.
 		s.credRouteWhen(authProtected, http.MethodPost, "/api-keys/:id/rotate", s.apiKeyOwnedByAnotherUser,
 			gone("POST /api/v1/auth/api-keys (create a new key), then DELETE /api/v1/auth/api-keys/:id (revoke the old one)"))
 	}
