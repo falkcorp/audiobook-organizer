@@ -189,8 +189,10 @@ func (h *UserHandler) ListUsers(c *gin.Context) {
 }
 
 // listUsersUnderIdentity is every account core holds, in core's order, as
-// HEAD's user record (legacyListUser). Any read error fails the list: a list
-// that silently left an account out would read as that account being gone.
+// HEAD's user record (legacyauth.LegacyUserFromCore, the one mapping every
+// account list under core identity uses, the store's included). Any read error
+// fails the list: a list that silently left an account out would read as that
+// account being gone.
 func listUsersUnderIdentity(ctx context.Context, id *legacyauth.Identity) ([]database.User, error) {
 	if id.Users == nil {
 		return nil, errNoIdentityUsers
@@ -201,35 +203,10 @@ func listUsersUnderIdentity(ctx context.Context, id *legacyauth.Identity) ([]dat
 			return nil, err
 		}
 		if u != nil {
-			out = append(out, legacyListUser(u))
+			out = append(out, legacyauth.LegacyUserFromCore(u))
 		}
 	}
 	return out, nil
-}
-
-// legacyListUser is a core account in HEAD's words, for the fields the list
-// shows. Roles keep nil as nil (HEAD's system user had none, shown as null).
-// Core's "disabled" is shown as "inactive", HEAD's canonical word for it: M3
-// maps every non-active HEAD status to disabled and reports each word other
-// than "inactive" in its import log (SEC-11), so the original of such a row
-// (HEAD's DeactivateUser wrote "locked") is in that log, not in core's record.
-// Every other status is the same word in both.
-func legacyListUser(u *coreauth.User) database.User {
-	var roles []string
-	if u.Roles != nil {
-		roles = make([]string, len(u.Roles))
-		for i, r := range u.Roles {
-			roles[i] = string(r)
-		}
-	}
-	status := string(u.Status)
-	if u.Status == coreauth.StatusDisabled {
-		status = "inactive"
-	}
-	return database.User{
-		ID: string(u.ID), Username: u.Username, Email: u.Email, Roles: roles, Status: status,
-		MergedIntoUserID: string(u.MergedInto), CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
-	}
 }
 
 // CreateInvite handles POST /api/v1/users/invite — generates an invite token.
