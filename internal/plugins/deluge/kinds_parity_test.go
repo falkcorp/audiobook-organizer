@@ -423,8 +423,8 @@ type failingMover struct {
 	fail map[string]bool
 }
 
-func (m *failingMover) MoveStorage(ids []string, dest string) error {
-	err := m.fakeClient.MoveStorage(ids, dest)
+func (m *failingMover) MoveStorage(ctx context.Context, ids []string, dest string) error {
+	err := m.fakeClient.MoveStorage(ctx, ids, dest)
 	for _, id := range ids {
 		if m.fail[id] {
 			return errors.New("move failed")
