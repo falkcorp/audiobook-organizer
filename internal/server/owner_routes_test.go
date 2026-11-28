@@ -37,10 +37,16 @@ const (
 	otherAdminEmail     = "target@example.test"
 )
 
+// fakeAccessVerifier accepts the assertions it maps to claims. An assertion
+// mapped to nil is a service token: valid, but it names no person
+// (cfaccess.ErrNonIdentityAssertion, as the real verifier reports one).
 type fakeAccessVerifier map[string]*legacyoauth.IdentityClaims
 
 func (f fakeAccessVerifier) Verify(_ context.Context, raw string) (*legacyoauth.IdentityClaims, error) {
 	if c, ok := f[raw]; ok {
+		if c == nil {
+			return nil, cfaccess.ErrNonIdentityAssertion
+		}
 		cp := *c
 		return &cp, nil
 	}
