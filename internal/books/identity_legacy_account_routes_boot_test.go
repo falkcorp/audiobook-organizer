@@ -60,11 +60,10 @@ func TestIdentityBoot_LegacyAccountRoutesRefuseOnAMigratedStore(t *testing.T) {
 	refused(t, http.MethodPost, "/api/v1/users/"+seed.target+"/deactivate", nil, admin, "user", seed.target)
 	refused(t, http.MethodPost, "/api/v1/users/"+seed.viewer+"/reactivate", nil, admin, "user", seed.viewer)
 
-	// The sessions list reads books' drained session rows: it lists nothing, so it
-	// discloses no session of anyone.
+	// The sessions list is gone under core identity and discloses no session of
+	// anyone (identity_legacy_sessions_list_boot_test.go).
 	list := doJSON(t, h, http.MethodGet, "/api/v1/auth/sessions", nil, viewer)
-	require.Equal(t, http.StatusOK, list.Code, list.Body.String())
-	require.JSONEq(t, `{"data":{"sessions":[]}}`, list.Body.String())
+	require.Equal(t, http.StatusGone, list.Code, list.Body.String())
 
 	// Nothing changed: every password still signs in at core, and every account
 	// is active (core's login refuses a disabled one).

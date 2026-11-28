@@ -1018,7 +1018,9 @@ func except(names []string, drop ...string) []string {
 const goneUnderIdentityWhy = "core owns the account under identity, so HEAD's route refuses with 410 Gone and names core's replacement (internal/server/wire_auth_routes.go: gone()); ruled by the coordinator 2026-11-28 as the designed refusal of a retired route, no access change"
 
 // logoutAnswers200: the principals that R0 answered POST /auth/logout 200 and the flip
-// answers 410. Left out: the five that stage 13 refuses at R0 and on the flip (the
+// answers 410. R0 answered GET /auth/sessions the same way to every one of them
+// (TestRecordedPrincipalsAreTheRecording holds the two recordings equal), and that
+// route answers them 410 too. Left out: the five that stage 13 refuses at R0 and on the flip (the
 // fp-worker session, the fp-worker keys that hold the worker atom alone, and
 // key:admin:worker), the anonymous caller (401 on both), and the three fp-worker keys
 // that R0 admitted and the flip refuses (registeredFPWorkerNarrowing: a letter change,
@@ -1027,11 +1029,12 @@ var logoutAnswers200 = except(recordedPrincipals,
 	"session:fp-worker", "key:admin:worker", "key:fp-worker:worker", "key:fp-worker:every", "key:fp-worker:empty",
 	"key:fp-worker:view", "key:fp-worker:settings", "key:fp-worker:users", Anonymous)
 
-// goneUnderIdentity builds the table of the four routes that answer 410 under core
+// goneUnderIdentity builds the table of the five routes that answer 410 under core
 // identity where R0 answered an ordinary status with the same letter A: every row is a
 // change of class alone (R0 class, then 410), one per route and transition, so the
 // letters stay A on both sides and the cells are named by class, not by letter. who is
-// the principals the table claims on the boot it belongs to.
+// the principals the table claims on the boot it belongs to; a route it claims no
+// principal of on that boot has no row there.
 func goneUnderIdentity(name string, who func(route string) []string, want, wantTwin int) diffTable {
 	row := func(route, r0Class string) diffRow {
 		return diffRow{
@@ -1040,29 +1043,33 @@ func goneUnderIdentity(name string, who func(route string) []string, want, wantT
 			why: goneUnderIdentityWhy,
 		}
 	}
-	return diffTable{
-		name: name, want: want, wantTwin: wantTwin,
-		rows: []diffRow{
-			row("GET /api/v1/auth/invite/:token", "404"),
-			row("POST /api/v1/auth/accept-invite", "4xx"),
-			row("POST /api/v1/auth/setup", "4xx"),
-			row("POST /api/v1/auth/logout", "2xx"),
-		},
+	var rows []diffRow
+	for _, r := range []diffRow{
+		row("GET /api/v1/auth/invite/:token", "404"),
+		row("POST /api/v1/auth/accept-invite", "4xx"),
+		row("POST /api/v1/auth/setup", "4xx"),
+		row("POST /api/v1/auth/logout", "2xx"),
+		row("GET /api/v1/auth/sessions", "2xx"),
+	} {
+		if len(r.who) > 0 {
+			rows = append(rows, r)
+		}
 	}
+	return diffTable{name: name, want: want, wantTwin: wantTwin, rows: rows}
 }
 
 // registeredGoneUnderIdentity: auth-on. 36 principals on each of invite, accept-invite
-// and setup, 27 on logout (logoutAnswers200); the core-native twins of 18 and 14 of
-// them.
+// and setup, 27 on each of logout and the sessions list (logoutAnswers200); the
+// core-native twins of 18 and 14 of them.
 var registeredGoneUnderIdentity = goneUnderIdentity(
 	"retired identity routes answer 410 under core identity (a change of class, letter A on both sides)",
 	func(route string) []string {
-		if route == "POST /api/v1/auth/logout" {
+		if route == "POST /api/v1/auth/logout" || route == "GET /api/v1/auth/sessions" {
 			return logoutAnswers200
 		}
 		return recordedPrincipals
 	},
-	3*36+27, 3*18+14,
+	3*36+2*27, 3*18+2*14,
 )
 
 // updateApplyStateWhy names the one cell the hermetic updater (hermeticOutbound) moved:
@@ -1086,11 +1093,19 @@ var registeredUpdateApplyState = diffTable{
 	}},
 }
 
-// registeredGoneUnderIdentityAuthOff: the same four routes for the auth-disabled
-// principal, whose R0 answers were 404, 400, 400 and 200.
+// registeredGoneUnderIdentityAuthOff: four of the routes for the auth-disabled
+// principal, whose R0 answers were 404, 400, 400 and 200. The sessions list is not
+// one: R0 refused the auth-disabled principal there (401, HEAD's handler finds no
+// user), and the flip refuses it still (goneToAUser keeps that refusal), so the cell
+// is R0's letter and in no table (TestReachRegisteredPath_HandlerRefusals holds it).
 var registeredGoneUnderIdentityAuthOff = goneUnderIdentity(
 	"retired identity routes answer 410 to the auth-disabled principal (a change of class, letter A on both sides)",
-	func(string) []string { return []string{Authoff} },
+	func(route string) []string {
+		if route == "GET /api/v1/auth/sessions" {
+			return nil
+		}
+		return []string{Authoff}
+	},
 	4, 0,
 )
 
