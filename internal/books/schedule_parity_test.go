@@ -599,7 +599,7 @@ func stubDefs(deps ScheduleDeps) []tasks.Definition {
 	for _, k := range ScheduledKinds() {
 		defs = append(defs, tasks.Task(k, tasks.TaskSpec[struct{}, struct{}]{
 			Title: string(k), Effects: tasks.ReadOnly(), Resume: tasks.ResumeDrop,
-			Perms: tasks.Permissions{Start: rbac.Need("gotham:run")}, Schedule: sched(k),
+			Perms: tasks.Permissions{Start: rbac.Need("gotham:run"), Manage: rbac.Need("gotham:run")}, Schedule: sched(k),
 			Run: func(*tasks.RC, struct{}) (struct{}, error) { return struct{}{}, nil },
 		}))
 	}

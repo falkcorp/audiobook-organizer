@@ -24,7 +24,7 @@
     {
       "dest": "examples/hello/count.go",
       "heading": "6.12.3 Task `hello.count`",
-      "sha256": "90870e3fb9795f33e903fc38cc342c94673a1627decd4616a42fa27ad3394321",
+      "sha256": "24c6d6223fba7eee9906d170790a70b6ab8a62ddee18da0c9a8243aa21d9c481",
       "snapshot": "count.go.txt",
       "spec": "06-app-sdk.md"
     },
