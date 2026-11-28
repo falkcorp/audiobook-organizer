@@ -119,6 +119,14 @@ type OperationDef struct {
 	// rule (or DedupeQueuedRuns, or Schedule) still has to match as well.
 	DedupeSameActorOnly bool
 
+	// StartPrecondition, when set, is asked by EnqueueOp before anything is
+	// queued whether this request may start the definition at all (see
+	// StartPrecondition). It is the one place for a refusal that every route to
+	// EnqueueOp must make, such as "this operation cannot be started while the
+	// server is in a mode that leaves it no account to run for". A refusal
+	// (RefuseStart) enqueues nothing. Nil asks nothing.
+	StartPrecondition StartPrecondition
+
 	// MergeQueuedParams may merge a new request into an existing QUEUED run of
 	// this definition. It is never called for a running or dispatcher-claimed
 	// run. Returning false preserves the normal separate-queue behavior.
