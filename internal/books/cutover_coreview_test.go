@@ -304,6 +304,9 @@ func identityCountProblems(steps []cutoverStep, before, after *storeScan) []stri
 // name: talia.al.ghul keeps viewer, ubu's list ends empty.
 func checkRoleHolders(t *testing.T, c corpus, r *cutoverResult) {
 	t.Helper()
+	if len(c.quarantineCases) == 0 {
+		t.Skipf("the %s corpus carries no overlay quarantine case", c.name)
+	}
 	fi := newFamilyIndex()
 	recorded := map[string]bool{}
 	for _, rec := range r.after.Quarantine {
