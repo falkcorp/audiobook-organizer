@@ -177,7 +177,8 @@ func dirImage(t *testing.T, dir string) map[string]string {
 // *storage.LevelTooNewError; and R0's own storage-format check, which compares the
 // legacy stamp books projects (legacyMaxFormat + 1) with the format it supports.
 // Both owners' stamps (books and core) are asserted raised to this build's levels.
-// The mid-M3 cell is F4-08's.
+// The mid-M3 cell is F4-08's: TestMidM3_OlderBuildRefusesBeforeAnyWrite (midm3_test.go),
+// over a HEAD store killed inside M3, which this test's corpus boots never stop inside.
 func TestCutoverRefusedByOlderBuilds(t *testing.T) {
 	flipLevel := flipOn().Manifest().Storage.Level
 	require.Positive(t, flipLevel, "the flipped manifest declares no raised books level: the test would check nothing")
