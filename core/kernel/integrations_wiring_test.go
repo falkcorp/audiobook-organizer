@@ -10,10 +10,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/integrations/download"
@@ -310,5 +313,116 @@ func TestBuildIntegrations_RecreatedInstanceStartsClean(t *testing.T) {
 			r.putAlfred(s)
 			p.clean(t, s, a.env(t), gs, true)
 		})
+	}
+}
+
+// The three closers are checked by what they stop, not by the debug line close
+// writes: a closer that returns nil without calling the part's Close still logs
+// "part closed".
+
+// TestBuildIntegrations_CloseStopsProviderHTTP: closing the services closes the
+// idle connections providerhttp's transports hold, so a kept-alive connection
+// an instance opened is gone afterwards.
+func TestBuildIntegrations_CloseStopsProviderHTTP(t *testing.T) {
+	r, in := newIntegRig(t, nil)
+	s, a := r.buildWithAlfred(in)
+	env := a.env(t)
+
+	var mu sync.Mutex
+	states := map[string]http.ConnState{}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "{}") }))
+	srv.Config.ConnState = func(c net.Conn, st http.ConnState) {
+		mu.Lock()
+		states[c.RemoteAddr().String()] = st
+		mu.Unlock()
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+	r.setIntegrations(func(v *integrationsSettings) { v.Egress.LANAllow = []string{"127.0.0.1"} })
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := env.HTTP.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+
+	count := func(want http.ConnState) int {
+		mu.Lock()
+		defer mu.Unlock()
+		n := 0
+		for _, st := range states {
+			if st == want {
+				n++
+			}
+		}
+		return n
+	}
+	waitFor := func(what string, cond func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+			if cond() {
+				return
+			}
+		}
+		t.Fatalf("timed out waiting for %s", what)
+	}
+	waitFor("the request's connection to go idle", func() bool { return count(http.StateIdle) == 1 })
+
+	if err := s.close(context.Background()); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	waitFor("providerhttp's close to drop the idle connection", func() bool { return count(http.StateIdle) == 0 && count(http.StateClosed) == 1 })
+}
+
+// TestBuildIntegrations_CloseStopsAI: closing the services unregisters the ai
+// router's gauge callback, so its families leave the scrape.
+func TestBuildIntegrations_CloseStopsAI(t *testing.T) {
+	r, in := newIntegRig(t, nil)
+	s := r.buildLoaded(in)
+	aiFamilies := func() []string {
+		t.Helper()
+		mfs, err := r.prov.Gatherer().Gather()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, mf := range mfs {
+			if strings.Contains(mf.GetName(), "_ai_") {
+				out = append(out, mf.GetName())
+			}
+		}
+		return out
+	}
+	if len(aiFamilies()) == 0 {
+		t.Fatal("the ai router's gauges are not in the scrape before close; the check below proves nothing")
+	}
+	if err := s.close(context.Background()); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if got := aiFamilies(); len(got) != 0 {
+		t.Fatalf("ai families still scraped after close: %v", got)
+	}
+}
+
+// TestBuildIntegrations_CloseStopsLibrary: closing the services closes the
+// library Manager, so a Reload afterwards says it is closed.
+func TestBuildIntegrations_CloseStopsLibrary(t *testing.T) {
+	r, in := newIntegRig(t, nil)
+	s := r.build(in)
+	rl := s.library.(library.Reloader)
+	if err := rl.Reload(context.Background()); err != nil {
+		t.Fatalf("Reload before close: %v", err)
+	}
+	if err := s.close(context.Background()); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	err := rl.Reload(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("Reload after close = %v, want the Manager's closed error", err)
 	}
 }
