@@ -186,7 +186,7 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 		// F8 own them. The server does not exist when Options runs: the backends
 		// resolve it when a run starts. With the predicate off no backend is
 		// named and the kernel registers none of the three kinds.
-		ib := server.NewInterimBackends(m.srv.Load)
+		ib := server.NewInterimBackends(m.srv.Load, interimAtoms)
 		ao.InterimBackends = app.InterimBackends{Holds: ib.Holds, Poll: ib.Poll, Export: ib.Export}
 	}
 	if identityOn() {

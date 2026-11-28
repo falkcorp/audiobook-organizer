@@ -49,7 +49,7 @@ func newInterimRC(t *testing.T, kind tasks.Kind, mode tasks.Mode, actor tasks.Ac
 // A run that starts before the server exists is refused by every backend, not
 // served from a nil.
 func TestInterimBackends_NoServerRefusesEveryRun(t *testing.T) {
-	b := NewInterimBackends(func() *Server { return nil })
+	b := NewInterimBackends(func() *Server { return nil }, nil)
 	rc := newInterimRC(t, "core.test", tasks.ModeLive, tasks.Actor{UserID: "bruce"}, "run-1")
 
 	_, err := b.Holds.ReleaseHolds(rc, providerhttp.ReleaseHoldsParams{})
@@ -146,7 +146,7 @@ func TestInterimPoll_NoPollerIsARunThatDidNothing(t *testing.T) {
 
 	// Through the adapter, on a server that has no batch poller: a nil
 	// *BatchPoller held in the interface must not be called.
-	b := NewInterimBackends(func() *Server { return &Server{} })
+	b := NewInterimBackends(func() *Server { return &Server{} }, nil)
 	res, err = b.Poll.PollBatches(rc, coreai.BatchPollParams{})
 	require.NoError(t, err)
 	assert.Equal(t, coreai.BatchPollResult{}, res)
@@ -247,7 +247,7 @@ func TestInterimExport_NarrowsToTheRunsActorAsHEADsExportDoes(t *testing.T) {
 
 			// The adapter, as the run's actor.
 			rc := newInterimRC(t, diagnostics.ExportKind, tasks.ModeLive, tasks.Actor{UserID: c.actor, AuthMethod: "session"}, "run-"+c.name)
-			res, err := NewInterimBackends(func() *Server { return f.srv }).Export.Export(rc, diagnostics.ExportParams{ActorID: c.actor})
+			res, err := NewInterimBackends(func() *Server { return f.srv }, testInterimAtoms).Export.Export(rc, viaJSON(t, diagnostics.ExportParams{ActorID: c.actor, Perms: []string{"core:admin"}}))
 			require.NoError(t, err)
 			require.Equal(t, "run-"+c.name+".zip", res.File)
 			got := filepath.Join(os.TempDir(), res.File)
@@ -276,11 +276,11 @@ func TestInterimExport_NarrowsToTheRunsActorAsHEADsExportDoes(t *testing.T) {
 func TestInterimExport_RefusesAnActorThatIsNotTheRuns(t *testing.T) {
 	s := &Server{}
 	rc := newInterimRC(t, diagnostics.ExportKind, tasks.ModeLive, tasks.Actor{UserID: "bruce"}, "r")
-	_, err := s.exportBundle(rc, diagnostics.ExportParams{ActorID: "selina"})
+	_, err := s.exportBundle(rc, diagnostics.ExportParams{ActorID: "selina"}, nil)
 	assert.ErrorIs(t, err, diagnostics.ErrActorMismatch)
 
 	rc = newInterimRC(t, diagnostics.ExportKind, tasks.ModeLive, tasks.Actor{System: "scheduler"}, "r")
-	_, err = s.exportBundle(rc, diagnostics.ExportParams{})
+	_, err = s.exportBundle(rc, diagnostics.ExportParams{}, nil)
 	assert.ErrorIs(t, err, diagnostics.ErrActorMismatch, "a run with no user must not be exported under an empty actor")
 }
 
@@ -289,7 +289,7 @@ func TestInterimExport_RefusesAnActorThatIsNotTheRuns(t *testing.T) {
 func TestInterimExport_RefusesSections(t *testing.T) {
 	s := &Server{}
 	rc := newInterimRC(t, diagnostics.ExportKind, tasks.ModeLive, tasks.Actor{UserID: "bruce"}, "r")
-	_, err := s.exportBundle(rc, diagnostics.ExportParams{ActorID: "bruce", Sections: []string{"core.health"}})
+	_, err := s.exportBundle(rc, diagnostics.ExportParams{ActorID: "bruce", Sections: []string{"core.health"}}, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sections")
 }
