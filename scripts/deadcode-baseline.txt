@@ -1276,6 +1276,7 @@ internal/books/searchindex.escapeWildcard
 internal/books/searchindex.escapeWith
 internal/books/searchindex.fieldClause
 internal/books/searchindex.indexChunk
+internal/books/searchindex.isBareStar
 internal/books/searchindex.nonEmpty
 internal/books/searchindex.notExpressible
 internal/books/searchindex.numericRange
