@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	abouth "github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -647,13 +648,17 @@ func TestMidM3_OlderBuildRefusesBeforeAnyWrite(t *testing.T) {
 				"the storage-format sidecar R0 and `make rollback` read is not above R0's supported format")
 			rows, files := rawKVs(t, fx.dbPath), dirImage(t, fx.root)
 			err = crashmatrix.Boot(t, aboStorageBuild(f), f)
+			// No write first, and not fatal: a pre-flip build that boots the half
+			// store must also show what it wrote, so this check is one a refusal
+			// regression reaches rather than one hidden behind the error below.
+			assert.Equal(t, rows, rawKVs(t, fx.dbPath), "the pre-flip build wrote rows over the %s store", s.name)
+			assert.Empty(t, imageDiff(files, dirImage(t, fx.root)), "the pre-flip build wrote files over the %s store", s.name)
 			require.Error(t, err, "the pre-flip build booted a half-migrated store")
 			var tooNew *storage.LevelTooNewError
 			require.True(t, errors.As(err, &tooNew), "the pre-flip build's refusal is not a level refusal: %v", err)
 			require.Greater(t, tooNew.Store, tooNew.Supported, "%v", err)
 			require.Equal(t, kernel.ExitConfig, kernel.ExitCode(err), "%v", err)
-			require.Equal(t, rows, rawKVs(t, fx.dbPath), "the refused boot wrote rows")
-			require.Empty(t, imageDiff(files, dirImage(t, fx.root)), "the refused boot wrote files")
+			require.False(t, t.Failed(), "the pre-flip build wrote over the %s store", s.name)
 
 			// This build resumes over what the refusal left.
 			require.NoError(t, crashmatrix.Boot(t, midM3Build(f, ""), f), "this build could not finish M3 after the older build's refusal")
