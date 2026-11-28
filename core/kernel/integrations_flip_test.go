@@ -286,12 +286,25 @@ func TestMountLibraryRoutes_Refusals(t *testing.T) {
 	if err := mountLibraryRoutes(r.CoreGroup(), typed, nil); err == nil {
 		t.Error("a typed-nil Manager mounted")
 	}
+	// A real Manager on a group that is not the core group: the refusal under
+	// test is the group's, not the Manager's.
+	rig, in := newIntegRig(t, nil)
+	live := rig.build(in)
 	sub := r.CoreGroup().Sub("/elsewhere")
-	if err := mountLibraryRoutes(sub, library.Manager(nil), nil); err == nil {
-		t.Error("a nil Manager mounted on a sub-group")
+	err := mountLibraryRoutes(sub, live.library, nil)
+	if err == nil {
+		t.Fatal("a real Manager mounted on a sub-group")
+	}
+	if !strings.Contains(err.Error(), "does not serve") || strings.Contains(err.Error(), "no library manager") {
+		t.Errorf("the sub-group refusal is not the group's: %v", err)
 	}
 	if err := mountLibraryBrowse(sub, emptyLibrary{}, nil); err == nil {
 		t.Error("the library route mounted on a group that is not the core group")
+	}
+	// The same Manager on the core group mounts, so the refusal above is the
+	// group's and nothing else.
+	if err := mountLibraryRoutes(r.CoreGroup(), live.library, nil); err != nil {
+		t.Errorf("a real Manager on the core group: %v", err)
 	}
 }
 

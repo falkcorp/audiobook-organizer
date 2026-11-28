@@ -67,6 +67,11 @@ type integrationsDeps struct {
 // closes what was already built, in reverse, and returns the failure joined
 // with any close error, with no services.
 //
+// A failed build cannot be retried on the same metrics provider: the scopes it
+// created (providerhttp, ai, library, download, notify) stay taken after the
+// close, so a second build fails with metrics.ErrScopeTaken at the first one.
+// A caller that wants another attempt builds a new provider.
+//
 // It registers in.Adapters under origin "core" (a core.* adapter ID only comes
 // from app.Options.Adapters, 05-metadata M1.4 step 1); module adapters go
 // through registerAdapters, and load reads the store once both are done.

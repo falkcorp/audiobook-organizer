@@ -32,7 +32,9 @@ func (l liveMapper) Mappings(source string) []library.Mapping { return l.m.Mappe
 
 // buildDownloads builds the download Pool over the Registry, with the
 // library's mapper as its path mapper (05-download 4.4: one mapper, one set of
-// matching rules) and core.download.caps_ttl.
+// matching rules) and core.download.caps_ttl. The TTL is read once, here:
+// PoolOptions.CapsTTL is a plain Duration, so the key is reload:"restart" (see
+// downloadSettings) rather than a live key that would not take effect.
 func (s *integrationsServices) buildDownloads(_ context.Context) error {
 	sc, err := s.scope("download", "adapter", "instance")
 	if err != nil {

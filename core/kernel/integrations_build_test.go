@@ -417,16 +417,24 @@ func TestBuildIntegrations_ScopesAreTakenOncePerConstructor(t *testing.T) {
 func TestBuildIntegrations_TypedNilsAreNormalised(t *testing.T) {
 	t.Run("audit", func(t *testing.T) {
 		_, in := newIntegRig(t, func(in *integrationsInputs) { in.Audit = (*audit.Store)(nil) })
-		if s, err := buildIntegrations(context.Background(), in); err == nil {
+		s, err := buildIntegrations(context.Background(), in)
+		if err == nil {
 			_ = s.close(context.Background())
 			t.Fatal("a typed-nil audit logger built")
+		}
+		if !strings.Contains(err.Error(), "Audit") || strings.Contains(err.Error(), "Secrets") {
+			t.Fatalf("the failure does not name the audit input alone: %v", err)
 		}
 	})
 	t.Run("secrets", func(t *testing.T) {
 		_, in := newIntegRig(t, func(in *integrationsInputs) { in.Secrets = (*secrets.Store)(nil) })
-		if s, err := buildIntegrations(context.Background(), in); err == nil {
+		s, err := buildIntegrations(context.Background(), in)
+		if err == nil {
 			_ = s.close(context.Background())
 			t.Fatal("a typed-nil secret store built")
+		}
+		if !strings.Contains(err.Error(), "Secrets") || strings.Contains(err.Error(), "Audit") {
+			t.Fatalf("the failure does not name the secrets input alone: %v", err)
 		}
 	})
 }
@@ -842,6 +850,14 @@ func TestDepsFor(t *testing.T) {
 	}
 	if empty.HTTP == nil || empty.Notify == nil {
 		t.Fatalf("an empty module ID lost its other services: %+v", empty)
+	}
+	// No publishable topic: an empty module owns none, and an empty topic is
+	// not "the empty module's" either.
+	for _, topic := range []string{"gotham.signal.raised.v1", ""} {
+		err := empty.Notify.Publish(context.Background(), nil, notify.Notification{Topic: topic})
+		if !errors.Is(err, notify.ErrForeignTopic) {
+			t.Fatalf("an empty module published topic %q: %v", topic, err)
+		}
 	}
 	if !strings.Contains(r.logs.String(), "no library scope for module") {
 		t.Fatal("the missing scope was not logged")
