@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"reflect"
 	"time"
 
@@ -33,12 +34,53 @@ import (
 // v2 definitions' deletion takes with them.
 
 // AuthorityRunReader is what the authority-build apply reads of the tasks run
-// store to find the plan it carries out; tasks.RunStore satisfies it.
+// store to find the plan it carries out: one run by id.
 type AuthorityRunReader = authorityRunReader
 
-// tasks.RunStore, the store core hands the host, must satisfy AuthorityRunReader:
-// a method dropped from either is caught here at compile time, not at the wiring.
-var _ AuthorityRunReader = tasks.RunStore(nil)
+// AuthorityRunLister is the run store's List, the one read of the run store the
+// books module holds: the module's own run-store handle (module.TaskRows, core's
+// own-kinds view of the run store) lists runs and has no point read, and the wide
+// tasks.RunStore is not the module's to hold. tasks.RunStore and the module's
+// handle both satisfy it.
+type AuthorityRunLister interface {
+	List(ctx context.Context, q tasks.RunQuery) iter.Seq2[tasks.RunRecord, error]
+}
+
+// NewAuthorityRunReader is the point read of one authority-build run over the
+// run store's List (the handle the module holds has no Get).
+//
+// It lists the authority-build kind only, so a run id of another kind answers
+// tasks.ErrRunNotFound ("plan run ... not found") where a point read would have
+// answered "run ... is <kind>, not an authority-build dry run". The set of plans
+// an apply may carry out is the same either way: the kind, Preview mode,
+// succeeded state and dry-run digest checks stay in loadNativeAuthorityPlan. The
+// listing pages to the end (a cap would drop the oldest runs) and a run list of
+// the one kind is as long as the number of authority builds ever started.
+func NewAuthorityRunReader(runs AuthorityRunLister) AuthorityRunReader {
+	return authorityRunsOverList{runs: runs}
+}
+
+type authorityRunsOverList struct{ runs AuthorityRunLister }
+
+func (a authorityRunsOverList) Get(ctx context.Context, id tasks.RunID) (tasks.RunRecord, error) {
+	q := tasks.RunQuery{Kinds: []tasks.Kind{authorityBuildKind}, RunFilter: tasks.RunFilter{Limit: cbRunListPage}}
+	for {
+		n := 0
+		for rec, err := range a.runs.List(ctx, q) {
+			if err != nil {
+				return tasks.RunRecord{}, err
+			}
+			if rec.ID == id {
+				return rec, nil
+			}
+			n++
+			q.After = rec.ID
+		}
+		if n == 0 {
+			return tasks.RunRecord{}, tasks.ErrRunNotFound
+		}
+	}
+}
 
 // G1Inputs is what newT6G1Deps builds group 1's deps from, beside the ops store
 // and the stand-down key every group shares.
@@ -47,8 +89,6 @@ type G1Inputs struct {
 	// Pebble activity store is wired (the SQLite tier): the backfill kind then
 	// reports "no Pebble activity store is wired" as at HEAD.
 	Activity database.ActivityFilterIndexBackfiller
-	// PlanRuns is the tasks run store an authority-build apply finds its plan in.
-	PlanRuns AuthorityRunReader
 	// FetchStore is the store the metadata fetch service reads and writes. Its
 	// writes never reach the service directly: each run wraps it in
 	// metafetchgate.Store over the run's writer before NewFetchService sees it.
@@ -82,11 +122,12 @@ func t6g1WriterTypes() []reflect.Type {
 	return types
 }
 
-// newT6G1Deps is the books module's t6g1Deps over the ops store src.
+// newT6G1Deps is the books module's t6g1Deps over the ops store src. runs is the
+// run store an authority-build apply finds its plan in (BooksTaskInputs.Runs).
 //
 // It returns an error when the shared row table has no row for the fetch service
 // (metafetchgate.Rows), which no input can fix.
-func newT6G1Deps(src OpsStore, in G1Inputs, standDownKey tasks.Key) (t6g1Deps, error) {
+func newT6G1Deps(src OpsStore, runs AuthorityRunLister, in G1Inputs, standDownKey tasks.Key) (t6g1Deps, error) {
 	fetchRows, err := metafetchgate.Rows()
 	if err != nil {
 		return t6g1Deps{}, fmt.Errorf("group 1 fetch rows: %w", err)
@@ -108,11 +149,13 @@ func newT6G1Deps(src OpsStore, in G1Inputs, standDownKey tasks.Key) (t6g1Deps, e
 			}
 		},
 		AIJournalRetentionDays: in.AIJournalRetentionDays,
-		PlanRuns:               in.PlanRuns,
 		StandDownKey:           standDownKey,
 		InvalidateDedupCache:   in.InvalidateDedupCache,
 		InvalidateAuthorsCache: in.InvalidateAuthorsCache,
 		ManualOnly:             in.ManualOnly,
+	}
+	if isSet(runs) {
+		d.PlanRuns = NewAuthorityRunReader(runs)
 	}
 	if in.Activity != nil {
 		d.ActivityFilter = booksT6G1Activity{s: in.Activity}

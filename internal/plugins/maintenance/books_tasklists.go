@@ -74,8 +74,9 @@ type BooksTaskInputs struct {
 	G3Source  G3Source
 	G3Host    G3BootHost
 	GuardTags repairs.GuardTagReader
-	// Runs is the tasks run store (the kernel's NativeStores.Runs): the native
-	// credits backfill keeps its class lists, ledger and judgements in it.
+	// Runs is the tasks run store (the module's own handle on core's run store):
+	// the native credits backfill keeps its class lists, ledger and judgements in
+	// it, and the authority-build apply lists it for the plan it carries out.
 	Runs CreditsRunStore
 	// Ops is the ops store group 4 reads and writes through; G4Host and Scan
 	// serve it. Scan nil is HEAD's degraded caller (no scanner to stand down).
@@ -143,7 +144,6 @@ func BooksTaskLists(in BooksTaskInputs) ([]tasks.Definition, error) {
 	n.check("AuxStores", in.AuxStores != nil)
 	n.check("StandDownKey", in.StandDownKey != "")
 	n.check("Schedules", in.Schedules != nil)
-	n.check("G1.PlanRuns", isSet(in.G1.PlanRuns))
 	n.check("G1.FetchStore", isSet(in.G1.FetchStore))
 	n.check("G1.NewFetchService", in.G1.NewFetchService != nil)
 	n.check("G1.NewTranscriptionRunners", in.G1.NewTranscriptionRunners != nil)
@@ -175,7 +175,7 @@ func BooksTaskLists(in BooksTaskInputs) ([]tasks.Definition, error) {
 	}
 	out = append(out, jl...)
 
-	g1, err := newT6G1Deps(in.Ops, in.G1, in.StandDownKey)
+	g1, err := newT6G1Deps(in.Ops, in.Runs, in.G1, in.StandDownKey)
 	if err != nil {
 		return nil, fmt.Errorf("maintenance group 1: %w", err)
 	}

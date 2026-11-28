@@ -8,6 +8,7 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"iter"
 	"reflect"
 	"slices"
 	"strings"
@@ -33,7 +34,6 @@ const g1TestKey = tasks.Key("books.test.library-scan")
 // fetch kinds need, and a fetch source that answers fixedly.
 func g1TestInputs(s *database.PebbleStore, results []metadata.BookMetadata) G1Inputs {
 	return G1Inputs{
-		PlanRuns:   t6g1NoRuns{},
 		FetchStore: s,
 		NewFetchService: func(gated metafetch.Store) *metafetch.Service {
 			svc := metafetch.NewService(gated)
@@ -52,11 +52,12 @@ func g1TestInputs(s *database.PebbleStore, results []metadata.BookMetadata) G1In
 	}
 }
 
-// t6g1NoRuns is a run store with no run in it.
-type t6g1NoRuns struct{}
+// g1NoRuns is a run store with no run in it, shaped like the handle the books
+// module holds: it lists and has no point read.
+type g1NoRuns struct{}
 
-func (t6g1NoRuns) Get(context.Context, tasks.RunID) (tasks.RunRecord, error) {
-	return tasks.RunRecord{}, tasks.ErrRunNotFound
+func (g1NoRuns) List(context.Context, tasks.RunQuery) iter.Seq2[tasks.RunRecord, error] {
+	return func(func(tasks.RunRecord, error) bool) {}
 }
 
 // g1WriterCalls is one call of every method of every writer group, by method
@@ -146,7 +147,7 @@ func g1Writer(t *testing.T, deps t6g1Deps, w tasks.Writer) *booksT6G1Writer {
 
 func g1Deps(t *testing.T, s *database.PebbleStore) t6g1Deps {
 	t.Helper()
-	d, err := newT6G1Deps(s, g1TestInputs(s, nil), g1TestKey)
+	d, err := newT6G1Deps(s, g1NoRuns{}, g1TestInputs(s, nil), g1TestKey)
 	require.NoError(t, err)
 	return d
 }
@@ -290,7 +291,7 @@ func TestBooksT6G1Deps_OptionalInputsStayUnset(t *testing.T) {
 	s, _ := g2Fixture(t)
 	in := g1TestInputs(s, nil)
 
-	d, err := newT6G1Deps(s, in, g1TestKey)
+	d, err := newT6G1Deps(s, g1NoRuns{}, in, g1TestKey)
 	require.NoError(t, err)
 	require.Nil(t, d.ActivityFilter, "no activity store, no reads of one")
 	require.NotNil(t, d.NewMetadataFetcher)
@@ -307,7 +308,7 @@ func TestBooksT6G1Deps_OptionalInputsStayUnset(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			in := g1TestInputs(s, nil)
 			mutate(&in)
-			d, err := newT6G1Deps(s, in, g1TestKey)
+			d, err := newT6G1Deps(s, g1NoRuns{}, in, g1TestKey)
 			require.NoError(t, err)
 			require.Nil(t, d.NewMetadataFetcher)
 			require.Nil(t, d.NewTranscriptionRunners)
@@ -327,7 +328,7 @@ func TestBooksT6G1Deps_FetchServiceGetsTheGatedStoreOverTheRunsWriter(t *testing
 	in := g1TestInputs(s, nil)
 	factory := in.NewFetchService
 	in.NewFetchService = func(gated metafetch.Store) *metafetch.Service { handed = gated; return factory(gated) }
-	d, err := newT6G1Deps(s, in, g1TestKey)
+	d, err := newT6G1Deps(s, g1NoRuns{}, in, g1TestKey)
 	require.NoError(t, err)
 
 	rec := &booksGateRecorder{refuse: tasks.ErrOutsideEffects}
@@ -357,7 +358,7 @@ func TestBooksT6G1_FetchKindsRunThroughTheBuiltServiceAndTheEnforcingWriter(t *t
 			Title: "Year One", Author: "Bruce Wayne", Publisher: "Wayne Enterprises", Series: "The Long Halloween", SeriesPosition: "1",
 			Description: "A masked vigilante's first year.", PublishYear: 1987, Language: "English",
 		}})
-		d, err := newT6G1Deps(s, in, g1TestKey)
+		d, err := newT6G1Deps(s, g1NoRuns{}, in, g1TestKey)
 		require.NoError(t, err)
 		def := t6g1ByKind(t, (&Plugin{}).t6g1Kinds(d, nil), resolveProductionAuthorsKind)
 		w := writertest.New(def, tasks.ModeLive)
@@ -374,7 +375,7 @@ func TestBooksT6G1_FetchKindsRunThroughTheBuiltServiceAndTheEnforcingWriter(t *t
 		_, err := s.CreateBook(&database.Book{ID: "b1", Title: "", FilePath: "/lib/b1.m4b", TranscribedTitle: &trans, TranscribedAuthor: &author})
 		require.NoError(t, err)
 
-		d, err := newT6G1Deps(s, g1TestInputs(s, nil), g1TestKey)
+		d, err := newT6G1Deps(s, g1NoRuns{}, g1TestInputs(s, nil), g1TestKey)
 		require.NoError(t, err)
 		def := t6g1ByKind(t, (&Plugin{}).t6g1Kinds(d, nil), autoMatchTranscribedKind)
 		w := writertest.New(def, tasks.ModeLive)
@@ -396,7 +397,7 @@ func TestBooksT6G1_AuthorSplitScanRunsThroughTheBuiltDeps(t *testing.T) {
 	require.NoError(t, err)
 	ids := mkSplitBooks(t, st, composite.ID, 2)
 
-	d, err := newT6G1Deps(st, g1TestInputs(st, nil), g1TestKey)
+	d, err := newT6G1Deps(st, g1NoRuns{}, g1TestInputs(st, nil), g1TestKey)
 	require.NoError(t, err)
 	def := t6g1ByKind(t, (&Plugin{}).t6g1Kinds(d, nil), authorSplitScanKind)
 	w := writertest.New(def, tasks.ModeLive)
@@ -411,7 +412,7 @@ func TestBooksT6G1_AuthorSplitScanRunsThroughTheBuiltDeps(t *testing.T) {
 
 func TestBooksT6G1_PruneAIJournalRunsThroughTheBuiltDeps(t *testing.T) {
 	s := seedJournal(t)
-	d, err := newT6G1Deps(s, g1TestInputs(s, nil), g1TestKey)
+	d, err := newT6G1Deps(s, g1NoRuns{}, g1TestInputs(s, nil), g1TestKey)
 	require.NoError(t, err)
 	def := t6g1ByKind(t, (&Plugin{}).t6g1Kinds(d, nil), pruneAIJournalKind)
 	w := writertest.New(def, tasks.ModeLive)
@@ -431,7 +432,7 @@ func TestBooksT6G1_PruneAIJournalRunsThroughTheBuiltDeps(t *testing.T) {
 func TestBooksT6G1_PruneAIJournalPreviewIsRefusedAndDeletesNothing(t *testing.T) {
 	s := seedJournal(t)
 	before := t6g5Snapshot(t, s)
-	d, err := newT6G1Deps(s, g1TestInputs(s, nil), g1TestKey)
+	d, err := newT6G1Deps(s, g1NoRuns{}, g1TestInputs(s, nil), g1TestKey)
 	require.NoError(t, err)
 	def := t6g1ByKind(t, (&Plugin{}).t6g1Kinds(d, nil), pruneAIJournalKind)
 	w := writertest.New(def, tasks.ModePreview)
