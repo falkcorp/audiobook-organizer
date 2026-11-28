@@ -6,6 +6,7 @@
 package maintenance_test
 
 import (
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"slices"
 	"testing"
 
@@ -39,6 +40,7 @@ func TestT6G1StartDrift_MatchesSettingsManageAtom(t *testing.T) {
 	for _, d := range defs {
 		start := tasks.CommonOf(d).Perms.Start
 		require.Equal(t, rbac.KindAllOf, start.Kind(), "%s start must need every scope (AllOf)", d.Kind())
+		require.Equal(t, taskmanage.Requirement(), tasks.CommonOf(d).Perms.Manage, "%s Manage is the books task-manage requirement", d.Kind())
 		require.Equal(t, wantKind, start.Kind(), "%s start kind drifted from the settings.manage atom", d.Kind())
 		var got []string
 		for _, p := range start.Permissions() {

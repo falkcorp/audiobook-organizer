@@ -12,8 +12,9 @@
 //
 // It is a layer-0 leaf (core's rbac only) because every plugin that declares a
 // books kind must reach it and internal/books itself imports the plugins; the
-// atom table in internal/books derives its settings.manage row from Scopes, and
-// a pin test there holds the two together.
+// atom table in internal/books keeps its settings.manage row as literal scopes
+// (a drift test in the maintenance plugin parses atoms.go's source), and a pin
+// test in internal/books holds the two lists together.
 package taskmanage
 
 import "github.com/falkcorp/mediacore/rbac"

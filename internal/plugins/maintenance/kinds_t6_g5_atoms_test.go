@@ -6,6 +6,7 @@
 package maintenance_test
 
 import (
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books"
@@ -47,5 +48,6 @@ func TestT6G5_EveryKindStartsOnSettingsManage(t *testing.T) {
 		start := tasks.CommonOf(d).Perms.Start
 		assert.Equal(t, rbac.KindAllOf, start.Kind(), "%s: every scope is required", d.Kind())
 		assert.Equal(t, want.Permissions(), start.Permissions(), "%s", d.Kind())
+		assert.Equal(t, taskmanage.Requirement(), tasks.CommonOf(d).Perms.Manage, "%s: Manage is the books task-manage requirement", d.Kind())
 	}
 }
