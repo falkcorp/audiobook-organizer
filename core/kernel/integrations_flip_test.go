@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -383,6 +385,62 @@ func TestLibrarySource_DefaultSectionReachesLibrary(t *testing.T) {
 		t.Errorf("transfer.workers = %s, want the default 4", got)
 	}
 	r.build(in) // and the build accepts it
+}
+
+// TestBuildIntegrations_LibraryFloorIsTheEffectiveDefault: the built Manager
+// holds the effective section's free-space floor, 5 GiB, not the zero a zero
+// struct would marshal. The floor is read where library uses it: a transfer
+// into a root that sets no min_free of its own is refused when the source
+// (a sparse file, so nothing is written) is larger than the disk, and the
+// refusal names the floor it applied.
+func TestBuildIntegrations_LibraryFloorIsTheEffectiveDefault(t *testing.T) {
+	root := func(id, role string) json.RawMessage {
+		b, err := json.Marshal(map[string]any{"id": id, "path": t.TempDir(), "role": role, "owner": "core", "sentinel": "bootstrap"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	var inPath string
+	in1, lib1 := root("gotham-in", "import"), root("gotham-lib", "library")
+	pathOf := func(raw json.RawMessage) string {
+		var spec struct{ Path string }
+		if err := json.Unmarshal(raw, &spec); err != nil {
+			t.Fatal(err)
+		}
+		return spec.Path
+	}
+	inPath = pathOf(in1)
+	// A bootstrap root is accepted once it has content (an unmounted share does not).
+	if err := os.Mkdir(filepath.Join(pathOf(lib1), "Arkham"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	r, in := newIntegRig(t, nil)
+	r.setLibrary(func(v *librarySettings) { v.Roots = []json.RawMessage{in1, lib1} })
+	s := r.build(in)
+
+	big := filepath.Join(inPath, "big.m4b")
+	f, err := os.Create(big)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(1 << 43); err != nil { // 8 TiB, sparse
+		_ = f.Close()
+		t.Skipf("the temp filesystem cannot hold a sparse file this size: %v", err)
+	}
+	_ = f.Close()
+
+	opts := library.NewTransferOptions(library.Copy, library.PermLibrary, library.VerifySHA256)
+	opts.MkdirAll = true
+	_, err = s.library.Transfer(context.Background(), "core",
+		library.Path{Root: "gotham-in", Rel: "big.m4b"}, library.Path{Root: "gotham-lib", Rel: "Batman/big.m4b"}, opts)
+	if !errors.Is(err, library.ErrInsufficientSpace) {
+		t.Fatalf("a transfer larger than the disk = %v, want ErrInsufficientSpace", err)
+	}
+	if want := "floor of 5368709120"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("the refusal does not apply the default 5 GiB floor (%q): %v", want, err)
+	}
 }
 
 // TestBuildIntegrations_ZeroLibrarySectionIsRefused: a Library reader that

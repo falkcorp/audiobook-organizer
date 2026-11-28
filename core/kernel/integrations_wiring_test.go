@@ -124,7 +124,7 @@ func TestBuildIntegrations_PoolFollowsTheReloadedMapper(t *testing.T) {
 	mapping := func(remote, rel string) json.RawMessage {
 		return json.RawMessage(`{"source":"download:alfred","remote":"` + remote + `","local":{"root":"batcave","rel":"` + rel + `"}}`)
 	}
-	root, err := json.Marshal(map[string]any{"id": "batcave", "path": t.TempDir(), "role": "library", "owner": "core", "sentinel": "required"})
+	root, err := json.Marshal(map[string]any{"id": "batcave", "path": t.TempDir(), "role": "library", "owner": "core", "sentinel": "bootstrap"})
 	if err != nil {
 		t.Fatal(err)
 	}
