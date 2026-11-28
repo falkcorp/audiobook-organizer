@@ -16,6 +16,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 )
 
@@ -1018,5 +1019,195 @@ func TestCancelCascade_ACanceledChildReleasesItsStandDown(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Errorf("stand-down marker %s outlived its canceled holder", m.Key)
+	}
+}
+
+// The reach of a cancel is the canceling caller's own (F5-18 C6, the cancel
+// authority ruling): a descendant the caller may not cancel, by the rule a direct
+// cancel of that run applies, is skipped and keeps running, as it did before any
+// cascade existed, and so does everything beneath it. The fixtures: gotham.watch
+// (started by gordon) enqueues gotham.yard and gotham.vault; gotham.vault enqueues
+// gotham.cell. Everyone holds gotham:run; only gotham:vault cancels a vault.
+
+const (
+	scopeGothamRun = rbac.Permission("gotham:run")
+	scopeVault     = rbac.Permission("gotham:vault")
+)
+
+type reachRig struct {
+	h                       *harness
+	parent                  tasks.RunID
+	yard, vault, cell       tasks.RunID
+	vaultStopped, cellStops *atomic.Bool
+}
+
+func newReachRig(t *testing.T) *reachRig {
+	t.Helper()
+	started := make(chan tasks.RunID, 8)
+	r := &reachRig{vaultStopped: new(atomic.Bool), cellStops: new(atomic.Bool)}
+	leaf := func(kind string, stopped *atomic.Bool, edit func(*tasks.Common)) tasks.Definition {
+		return taskDef(kind, func(rc *tasks.RC, _ noParams) (string, error) {
+			started <- rc.RunID()
+			<-rc.Context().Done()
+			if stopped != nil {
+				stopped.Store(true)
+			}
+			return "", context.Cause(rc.Context())
+		}, func(c *tasks.Common) {
+			c.Effects = tasks.Writes(tasks.Res("gotham", kind))
+			c.Cancel = tasks.Cooperative(time.Second)
+			if edit != nil {
+				edit(c)
+			}
+		})
+	}
+	watch := taskDef("gotham.watch", func(rc *tasks.RC, _ noParams) (string, error) {
+		for _, k := range []tasks.Kind{"gotham.yard", "gotham.vault"} {
+			if _, err := rc.Enqueue(k, noParams{}); err != nil {
+				return "", err
+			}
+		}
+		started <- rc.RunID()
+		<-rc.Context().Done()
+		return "", context.Cause(rc.Context())
+	}, func(c *tasks.Common) {
+		c.Effects = tasks.Writes(tasks.Res("gotham", "watch"))
+		c.Cancel = tasks.Cooperative(time.Second)
+	})
+	vault := taskDef("gotham.vault", func(rc *tasks.RC, _ noParams) (string, error) {
+		if _, err := rc.Enqueue("gotham.cell", noParams{}); err != nil {
+			return "", err
+		}
+		started <- rc.RunID()
+		<-rc.Context().Done()
+		r.vaultStopped.Store(true)
+		return "", context.Cause(rc.Context())
+	}, func(c *tasks.Common) {
+		c.Effects = tasks.Writes(tasks.Res("gotham", "vault"))
+		c.Cancel = tasks.Cooperative(time.Second)
+		c.Perms.Cancel = rbac.Need(scopeVault)
+	})
+	defs := []tasks.Definition{watch, leaf("gotham.yard", nil, nil), vault, leaf("gotham.cell", r.cellStops, nil)}
+	r.h = newHarness(t, defs, func(o *Options) {
+		cascadeOpts(t, 10*time.Millisecond)(o)
+		o.Catalog = catalogWith(t, scopeGothamRun, scopeVault)
+		withPrincipal(o)
+	})
+	ref, err := r.h.x.Start(asUser("gordon", scopeGothamRun), "gotham.watch", tasks.StartRequest{Mode: tasks.ModeRequestLive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.parent = ref.ID
+	for range 4 { // watch, yard, vault, cell
+		<-started
+	}
+	for _, id := range r.h.children(r.parent) {
+		switch r.h.get(id).Kind {
+		case "gotham.yard":
+			r.yard = id
+		case "gotham.vault":
+			r.vault = id
+		}
+	}
+	if kids := r.h.children(r.vault); len(kids) == 1 {
+		r.cell = kids[0]
+	}
+	if r.yard == "" || r.vault == "" || r.cell == "" {
+		t.Fatalf("the tree is incomplete: yard %q vault %q cell %q", r.yard, r.vault, r.cell)
+	}
+	return r
+}
+
+// logLines is the parent's run log, one message per line.
+func (r *reachRig) logLines(id tasks.RunID) []string {
+	r.h.t.Helper()
+	var out []string
+	for p, err := range r.h.stores.Runs.Pages(context.Background(), id, tasks.PageQuery{Page: tasks.PageLog, Limit: 1000}) {
+		if err != nil {
+			r.h.t.Fatal(err)
+		}
+		out = append(out, p.Log.Message)
+	}
+	return out
+}
+
+// TestCancelCascade_ASkippedChildKeepsRunning is cell (a) and (b): harley may
+// cancel the parent and the yard (gotham:run) but not the vault (its kind's
+// Perms.Cancel is gotham:vault, and harley did not start it), so the cancel leaves
+// the vault running and, beneath it, the cell, which harley could cancel on its
+// own but cannot reach through the vault. The skip is in the parent's log and in
+// the cancel's report.
+func TestCancelCascade_ASkippedChildKeepsRunning(t *testing.T) {
+	r := newReachRig(t)
+	ctx, rep := WithCancelReport(asUser("harley", scopeGothamRun))
+	if err := r.h.x.Cancel(ctx, r.parent); err != nil {
+		t.Fatalf("a cancel that skipped a run must still succeed: %v", err)
+	}
+	if p := r.h.waitState(r.parent, tasks.StateCanceled); p.Reason != reasonCancel {
+		t.Errorf("parent %s/%q, want canceled/cancel", p.State, p.Reason)
+	}
+	if y := r.h.waitState(r.yard, tasks.StateCanceled); y.Reason != reasonCancel {
+		t.Errorf("the yard (cancelable by harley) %s/%q, want canceled/cancel", y.State, y.Reason)
+	}
+	r.h.stays(r.vault, tasks.StateRunning, 300*time.Millisecond)
+	r.h.stays(r.cell, tasks.StateRunning, 300*time.Millisecond)
+	if r.vaultStopped.Load() || r.cellStops.Load() {
+		t.Errorf("a skipped run's context ended (vault %v, cell %v)", r.vaultStopped.Load(), r.cellStops.Load())
+	}
+	if got := rep.Skipped(); len(got) != 1 || got[0] != r.vault {
+		t.Errorf("report names %v, want exactly the vault %s (the cell is beneath it, not reached)", got, r.vault)
+	}
+	var named bool
+	for _, l := range r.logLines(r.parent) {
+		if strings.Contains(l, string(r.vault)) && strings.Contains(l, "gotham.vault") {
+			named = true
+		}
+		if strings.Contains(l, string(r.cell)) {
+			t.Errorf("the log names the cell, which was never reached: %q", l)
+		}
+	}
+	if !named {
+		t.Errorf("the parent's log does not name the skipped run %s and its kind: %q", r.vault, r.logLines(r.parent))
+	}
+}
+
+// TestCancelCascade_TheReachIsTheCallers: the same tree canceled by the user who
+// started it (the run's own actor may cancel every run of it), by a holder of
+// core:tasks.manage, by a holder of the vault's scope, and by a kernel-internal
+// CancelAs (no checker limits it) loses every run and skips none.
+func TestCancelCascade_TheReachIsTheCallers(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		by   func(*reachRig) error
+	}{
+		{name: "the run's own actor", ctx: asUser("gordon", scopeGothamRun)},
+		{name: "core:tasks.manage", ctx: asUser("harley", scopeGothamRun, scopeTasksManage)},
+		{name: "the vault's scope", ctx: asUser("harley", scopeGothamRun, scopeVault)},
+		{name: "a kernel-internal CancelAs", ctx: context.Background(), by: func(r *reachRig) error {
+			return r.h.x.CancelAs(context.Background(), r.parent, tasks.Actor{UserID: "harley"})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newReachRig(t)
+			ctx, rep := WithCancelReport(tc.ctx)
+			var err error
+			if tc.by != nil {
+				err = tc.by(r)
+			} else {
+				err = r.h.x.Cancel(ctx, r.parent)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			for name, id := range map[string]tasks.RunID{"parent": r.parent, "yard": r.yard, "vault": r.vault, "cell": r.cell} {
+				if got := r.h.waitState(id, tasks.StateCanceled); got.Reason != reasonCancel {
+					t.Errorf("%s %s/%q, want canceled/cancel", name, got.State, got.Reason)
+				}
+			}
+			if got := rep.Skipped(); len(got) != 0 {
+				t.Errorf("report names %v, want none", got)
+			}
+		})
 	}
 }

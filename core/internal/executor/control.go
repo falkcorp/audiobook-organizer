@@ -182,7 +182,7 @@ func (e *executor) Cancel(ctx context.Context, id tasks.RunID) error {
 			return fmt.Errorf("%w: cancel %s", ErrNotPermitted, id)
 		}
 	}
-	return e.CancelAs(ctx, id, actor)
+	return e.cancel(ctx, id, actor, who)
 }
 
 func (e *executor) mayCancel(rec tasks.RunRecord, actor tasks.Actor, who rbac.Checker) bool {
@@ -212,6 +212,14 @@ func (e *executor) mayCancel(rec tasks.RunRecord, actor tasks.Actor, who rbac.Ch
 // nil; a terminal one is not found (HEAD's repeat-cancel rule,
 // cancel_persisted_test.go). A held run is refused (ErrHeld).
 func (e *executor) CancelAs(ctx context.Context, id tasks.RunID, by tasks.Actor) error {
+	return e.cancel(ctx, id, by, nil)
+}
+
+// cancel is CancelAs and Cancel's body. who is the caller's checker, nil for a
+// kernel-internal CancelAs: it decides which descendants the cancel may take
+// down with the run (cancelDescendants). The permission to cancel the named run
+// itself was checked by the caller of cancel.
+func (e *executor) cancel(ctx context.Context, id tasks.RunID, by tasks.Actor, who rbac.Checker) error {
 	rec, err := e.runs.Get(ctx, id)
 	if err != nil {
 		return err
@@ -219,7 +227,7 @@ func (e *executor) CancelAs(ctx context.Context, id tasks.RunID, by tasks.Actor)
 	if e.held(rec.Kind) {
 		return fmt.Errorf("%w: %s", ErrHeld, id)
 	}
-	return e.stop(ctx, id, by, reasonCancel, tasks.ErrCanceled)
+	return e.stop(ctx, id, by, who, reasonCancel, tasks.ErrCanceled)
 }
 
 // stop is cancel's core, shared with the watchdog (reason watchdog). A cancel
@@ -237,7 +245,7 @@ func (e *executor) CancelAs(ctx context.Context, id tasks.RunID, by tasks.Actor)
 // cancel already ended (stopOne answers "not found", which is still the answer
 // when the cascade has nothing to report, HEAD's repeat-cancel rule). A run that
 // ended any other way (the watchdog, its timeout) is not cascaded from.
-func (e *executor) stop(ctx context.Context, id tasks.RunID, by tasks.Actor, reason string, cause error) error {
+func (e *executor) stop(ctx context.Context, id tasks.RunID, by tasks.Actor, who rbac.Checker, reason string, cause error) error {
 	err := e.stopOne(ctx, id, by, reason, cause)
 	if reason != reasonCancel {
 		return err
@@ -249,12 +257,12 @@ func (e *executor) stop(ctx context.Context, id tasks.RunID, by tasks.Actor, rea
 		if rec, gerr := e.runs.Get(ctx, id); gerr != nil || !canceledByCancel(rec) {
 			return err
 		}
-		if cerr := e.cancelDescendants(context.WithoutCancel(ctx), id, by); cerr != nil {
+		if cerr := e.cancelDescendants(context.WithoutCancel(ctx), id, by, who); cerr != nil {
 			return cerr
 		}
 		return err
 	}
-	return e.cancelDescendants(context.WithoutCancel(ctx), id, by)
+	return e.cancelDescendants(context.WithoutCancel(ctx), id, by, who)
 }
 
 // stopOne is stop for one run: the in-process attempt is looked up inside the

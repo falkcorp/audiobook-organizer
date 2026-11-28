@@ -13,6 +13,7 @@ import (
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/entity"
+	"github.com/falkcorp/mediacore/internal/executor"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -109,12 +110,26 @@ func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request, p *auth.Princ
 		s.fail(w, r, viewErr)
 		return
 	}
-	if err := s.d.Client.Cancel(r.Context(), id); err != nil {
+	// A cancel also takes down the runs the run enqueued, but only those the
+	// caller may cancel (F5-18 C6). The ones it left running are listed by the
+	// report and named in the audit record. A caller that skipped a run is never
+	// the run's own actor (children inherit it, and the actor may cancel any run
+	// it owns), so the record below is already written for it.
+	ctx, report := executor.WithCancelReport(r.Context())
+	if err := s.d.Client.Cancel(ctx, id); err != nil {
 		s.fail(w, r, err)
 		return
 	}
+	skipped := report.Skipped()
 	if viewErr != nil || !sameActor(p, before) {
 		details := map[string]any{}
+		if len(skipped) > 0 {
+			ids := make([]string, len(skipped))
+			for i, id := range skipped {
+				ids[i] = string(id)
+			}
+			details["skipped"] = ids
+		}
 		if viewErr == nil {
 			details["kind"] = string(before.Kind)
 			// A system run is named in its own field rather than as a
