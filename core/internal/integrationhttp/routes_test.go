@@ -797,9 +797,10 @@ func TestIntegrationHTTP_HoldOfUnprobableInstanceIsReleased(t *testing.T) {
 }
 
 // TestIntegrationHTTP_HoldRouteChecksManage: the hold route turns away a
-// principal without core:integrations.manage itself, in addition to the
-// router, before it looks at the instance or the holds. The permission it
-// checks is the one the Registry's writes check.
+// principal that does not satisfy the route's requirement (instancePerm: both
+// core:integrations.manage and core:settings.manage) itself, in addition to the
+// router, before it looks at the instance or the holds. A holder of
+// core:integrations.manage alone is among those turned away.
 func TestIntegrationHTTP_HoldRouteChecksManage(t *testing.T) {
 	e := newEnv(t)
 	ctx := adminCtx()
@@ -809,10 +810,12 @@ func TestIntegrationHTTP_HoldRouteChecksManage(t *testing.T) {
 
 	reader := integrationstest.As(context.Background(), auth.MethodSession, "core:integrations.read")
 	noPerms := &auth.Principal{Method: auth.MethodSession}
+	manageOnly := integrationstest.As(context.Background(), auth.MethodSession, integrations.ManagePerm)
 	cases := map[string]*httpapi.In[instanceReq]{
-		"read only":              in(reader, instanceReq{Kind: kindNotify, ID: roofID}),
-		"no checker":             {Req: instanceReq{Kind: kindNotify, ID: roofID}, Principal: noPerms},
-		"no instance, read only": in(reader, instanceReq{Kind: kindNotify, ID: "no-such-instance"}),
+		"read only":               in(reader, instanceReq{Kind: kindNotify, ID: roofID}),
+		"manage without settings": in(manageOnly, instanceReq{Kind: kindNotify, ID: roofID}),
+		"no checker":              {Req: instanceReq{Kind: kindNotify, ID: roofID}, Principal: noPerms},
+		"no instance, read only":  in(reader, instanceReq{Kind: kindNotify, ID: "no-such-instance"}),
 	}
 	for name, req := range cases {
 		_, err := e.api.releaseHold(ctx, req)
@@ -829,19 +832,19 @@ func TestIntegrationHTTP_HoldRouteChecksManage(t *testing.T) {
 		t.Error("the holds were read for a caller without manage")
 	}
 
-	// The route's permission is the Registry's constant (integrations.ManagePerm,
-	// also pinned as text by the route table): a principal holding exactly it
-	// can write through the Registry and release a hold.
-	only := integrationstest.As(context.Background(), auth.MethodSession, integrations.ManagePerm)
+	// The route's requirement is instancePerm (also pinned as text by the route
+	// table): a principal holding exactly its two scopes can write through the
+	// Registry and release a hold.
+	only := integrationstest.As(context.Background(), auth.MethodSession, integrations.ManagePerm, permSettingsManage)
 	if _, err := e.update(only, kindNotify, roofID, func() IntegrationInstanceBody {
 		b := signalBody("", "http://192.0.2.20/", "")
 		b.Version = 1
 		return b
 	}()); err != nil {
-		t.Errorf("a principal holding integrations.ManagePerm cannot write: %v", err)
+		t.Errorf("a principal holding instancePerm's scopes cannot write: %v", err)
 	}
 	if _, err := e.api.releaseHold(only, in(only, instanceReq{Kind: kindNotify, ID: roofID})); err != nil {
-		t.Errorf("a principal holding integrations.ManagePerm cannot release: %v", err)
+		t.Errorf("a principal holding instancePerm's scopes cannot release: %v", err)
 	}
 }
 

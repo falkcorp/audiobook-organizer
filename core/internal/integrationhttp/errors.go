@@ -14,6 +14,7 @@ import (
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/integrations"
+	"github.com/falkcorp/mediacore/rbac"
 )
 
 // mapError turns the Registry's sentinels into the statuses 05-metadata M1.5
@@ -64,8 +65,8 @@ func mapError(err error) error {
 }
 
 // forbidden is the 403 of a caller that lacks core:integrations.manage (or
-// core:admin for Local); cause is the Registry's refusal, nil for the route's
-// own backstop. The text is fixed.
+// core:admin for Local); cause is the Registry's refusal. The handlers' own
+// backstop answers forbiddenFor. The text is fixed.
 func forbidden(cause error) error {
 	return &httpapi.Error{Status: http.StatusForbidden, Code: "permission_denied",
 		Detail: "this needs core:integrations.manage, and setting Local needs core:admin in an interactive session", Err: cause}
@@ -93,19 +94,26 @@ func (a *api) guard(p *auth.Principal) error {
 	return nil
 }
 
-// guardManage is guard plus the permission check the Registry would make on
-// the write: the principal must hold core:integrations.manage (the predicate
-// of the Registry's writerOf: no checker, or a checker without it, is 403).
-// The router's Perm is the check that matters; this one is a backstop for a
-// mounting mistake, and the routes that answer 404 for a missing instance
-// run it first so that a caller without the permission is turned away
+// guardPerm is guard plus a backstop for the route's own requirement: the
+// principal's checker must satisfy req, and a principal with no checker is
+// refused. The handlers pass the same requirement value Register gave the
+// route (instancePerm, managePerm), so a route mounted with a weaker Perm by
+// mistake still turns away a caller the route was meant to refuse. The router's
+// Perm is the check that matters; the routes that answer 404 for a missing
+// instance run this first, so a caller without the permission is turned away
 // before the answer can say whether an instance exists.
-func (a *api) guardManage(p *auth.Principal) error {
+func (a *api) guardPerm(p *auth.Principal, req rbac.Requirement) error {
 	if err := a.guard(p); err != nil {
 		return err
 	}
-	if p.Perms == nil || !p.Perms.Has(integrations.ManagePerm) {
-		return forbidden(nil)
+	if p.Perms == nil || !p.Perms.Satisfies(req) {
+		return forbiddenFor(req)
 	}
 	return nil
+}
+
+// forbiddenFor is the 403 of a backstop refusal; the text names the
+// requirement, which is route metadata, not request data.
+func forbiddenFor(req rbac.Requirement) error {
+	return &httpapi.Error{Status: http.StatusForbidden, Code: "permission_denied", Detail: "this needs " + req.String()}
 }

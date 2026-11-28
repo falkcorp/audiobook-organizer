@@ -51,6 +51,18 @@ const permRead rbac.Permission = "core:integrations.read"
 // its holder passes.
 const permSettingsManage rbac.Permission = "core:settings.manage"
 
+// instancePerm is the requirement of every instance route (list, get, create,
+// update, delete, release hold) and of those handlers' own backstop
+// (api.guardPerm). Register and the handlers both call it, so the route's Perm
+// and the backstop cannot drift apart.
+func instancePerm() rbac.Requirement {
+	return rbac.AllOf(integrations.ManagePerm, permSettingsManage)
+}
+
+// managePerm is the requirement of the health and the two test routes, and of
+// their backstops.
+func managePerm() rbac.Requirement { return rbac.Need(integrations.ManagePerm) }
+
 // maxBody bounds a body: an instance's settings are a handful of fields, and
 // a secret is capped at maxSecretBytes by validation, so a request has no
 // need for httpapi's 1 MiB default.
@@ -77,14 +89,24 @@ type api struct {
 // batch that commits the change.
 func Register(g *httpapi.Group, reg *integrations.Registry, holds HoldReleaser, auditLog audit.Logger) {
 	a := &api{reg: reg, holds: holds, audit: auditLog, base: g.Base()}
-	tags := []string{"integrations"}
-	read := rbac.Need(permRead)
-	manage := rbac.Need(integrations.ManagePerm)
 	// instance is every instance route's requirement, for every kind: both
 	// scopes, so the reach is HEAD's settings.manage atom and not the wider
 	// core:integrations.manage alone. The health read asks manage alone, and
 	// the adapters list and the two test routes are unchanged.
-	instance := rbac.AllOf(integrations.ManagePerm, permSettingsManage)
+	mount(g, a, routePerms{read: rbac.Need(permRead), instance: instancePerm(), manage: managePerm()})
+}
+
+// routePerms are the Perm each class of route is mounted with. Register passes
+// the requirements the handlers' backstop (api.guardPerm) checks; a test
+// passes a weaker one to prove the backstop holds without the router.
+type routePerms struct {
+	read, instance, manage rbac.Requirement
+}
+
+// mount registers the routes on g with the given Perms.
+func mount(g *httpapi.Group, a *api, p routePerms) {
+	tags := []string{"integrations"}
+	read, instance, manage := p.read, p.instance, p.manage
 
 	httpapi.Handle(g, httpapi.Route{
 		Method: http.MethodGet, Path: "/integrations/adapters", Name: "listIntegrationAdapters", Perm: read, Tags: tags,
@@ -300,7 +322,7 @@ func (a *api) listAdapters(_ context.Context, in *httpapi.In[listAdaptersReq]) (
 }
 
 func (a *api) listInstances(_ context.Context, in *httpapi.In[listInstancesReq]) (httpapi.Page[IntegrationInstance], error) {
-	if err := a.guard(in.Principal); err != nil {
+	if err := a.guardPerm(in.Principal, instancePerm()); err != nil {
 		return httpapi.Page[IntegrationInstance]{}, err
 	}
 	kind, err := kindRef(in.Req.Kind)
@@ -316,7 +338,7 @@ func (a *api) listInstances(_ context.Context, in *httpapi.In[listInstancesReq])
 }
 
 func (a *api) getInstance(_ context.Context, in *httpapi.In[instanceReq]) (IntegrationInstance, error) {
-	if err := a.guard(in.Principal); err != nil {
+	if err := a.guardPerm(in.Principal, instancePerm()); err != nil {
 		return IntegrationInstance{}, err
 	}
 	ref, err := instanceRef(in.Req.Kind, in.Req.ID)
@@ -332,7 +354,7 @@ func (a *api) getInstance(_ context.Context, in *httpapi.In[instanceReq]) (Integ
 
 func (a *api) createInstance(ctx context.Context, in *httpapi.In[createReq]) (httpapi.Created[IntegrationInstance], error) {
 	var zero httpapi.Created[IntegrationInstance]
-	if err := a.guard(in.Principal); err != nil {
+	if err := a.guardPerm(in.Principal, instancePerm()); err != nil {
 		return zero, err
 	}
 	kind, err := kindRef(in.Req.Kind)
@@ -355,7 +377,7 @@ func (a *api) createInstance(ctx context.Context, in *httpapi.In[createReq]) (ht
 func (a *api) updateInstance(ctx context.Context, in *httpapi.In[updateReq]) (IntegrationInstance, error) {
 	// The permission comes before the existence check below, so a caller
 	// without it learns nothing about which instances exist.
-	if err := a.guardManage(in.Principal); err != nil {
+	if err := a.guardPerm(in.Principal, instancePerm()); err != nil {
 		return IntegrationInstance{}, err
 	}
 	ref, err := instanceRef(in.Req.Kind, in.Req.ID)
@@ -407,7 +429,7 @@ func withheldOmitted(cur integrations.InstanceConfig, fi *fieldInfo, settings ma
 }
 
 func (a *api) deleteInstance(ctx context.Context, in *httpapi.In[instanceReq]) (httpapi.NoContent, error) {
-	if err := a.guard(in.Principal); err != nil {
+	if err := a.guardPerm(in.Principal, instancePerm()); err != nil {
 		return httpapi.NoContent{}, err
 	}
 	ref, err := instanceRef(in.Req.Kind, in.Req.ID)
@@ -421,7 +443,7 @@ func (a *api) deleteInstance(ctx context.Context, in *httpapi.In[instanceReq]) (
 }
 
 func (a *api) getHealth(ctx context.Context, in *httpapi.In[instanceReq]) (IntegrationHealth, error) {
-	if err := a.guard(in.Principal); err != nil {
+	if err := a.guardPerm(in.Principal, managePerm()); err != nil {
 		return IntegrationHealth{}, err
 	}
 	ref, err := instanceRef(in.Req.Kind, in.Req.ID)
@@ -450,7 +472,7 @@ func (a *api) testNew(ctx context.Context, in *httpapi.In[testNewReq]) (Integrat
 
 func (a *api) testInstance(ctx context.Context, in *httpapi.In[testInstanceReq]) (IntegrationTestResult, error) {
 	// The permission comes before the existence check below (see updateInstance).
-	if err := a.guardManage(in.Principal); err != nil {
+	if err := a.guardPerm(in.Principal, managePerm()); err != nil {
 		return IntegrationTestResult{}, err
 	}
 	ref, err := instanceRef(in.Req.Kind, in.Req.ID)

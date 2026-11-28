@@ -351,15 +351,15 @@ func (e *env) registry(t testing.TB) *integrations.Registry {
 // The principals the cases act as, bound into a context the way httpapi's
 // stage 12 does (auth.WithPrincipal).
 func adminCtx() context.Context {
-	return integrationstest.As(context.Background(), auth.MethodSession, integrationstest.Manage, integrationstest.Admin)
+	return integrationstest.As(context.Background(), auth.MethodSession, integrationstest.Manage, permSettingsManage, integrationstest.Admin)
 }
 
 func managerCtx() context.Context {
-	return integrationstest.As(context.Background(), auth.MethodSession, integrationstest.Manage)
+	return integrationstest.As(context.Background(), auth.MethodSession, integrationstest.Manage, permSettingsManage)
 }
 
 func apiKeyCtx() context.Context {
-	return integrationstest.As(context.Background(), auth.MethodAPIKey, integrationstest.Manage, integrationstest.Admin)
+	return integrationstest.As(context.Background(), auth.MethodAPIKey, integrationstest.Manage, permSettingsManage, integrationstest.Admin)
 }
 
 // in is the decoded request a handler receives: req with the principal ctx

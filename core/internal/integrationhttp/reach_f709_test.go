@@ -160,6 +160,15 @@ func reachRoutes() []reachRoute {
 // holding the instance gcpd-roof.
 func reachServe(t *testing.T, rt reachRoute, c reachCaller) *httptest.ResponseRecorder {
 	t.Helper()
+	rec, _ := reachServeWith(t, rt, c, nil)
+	return rec
+}
+
+// reachServeWith is reachServe with the routes mounted by mountFn instead of
+// Register (nil is Register), and the env returned so a cell can look at what
+// the request left behind.
+func reachServeWith(t *testing.T, rt reachRoute, c reachCaller, mountFn func(*httpapi.Group, *api)) (*httptest.ResponseRecorder, *env) {
+	t.Helper()
 	e := newEnv(t)
 	e.create(t, adminCtx(), kindNotify, signalBody(roofID, "http://192.0.2.20/", "alfred-1"))
 	cat := reachCatalog(t)
@@ -172,7 +181,11 @@ func reachServe(t *testing.T, rt reachRoute, c reachCaller) *httptest.ResponseRe
 	}); err != nil {
 		t.Fatal(err)
 	}
-	Register(r.CoreGroup(), e.reg, e.holds, e.log)
+	if mountFn == nil {
+		Register(r.CoreGroup(), e.reg, e.holds, e.log)
+	} else {
+		mountFn(r.CoreGroup(), &api{reg: e.reg, holds: e.holds, audit: e.log, base: r.CoreGroup().Base()})
+	}
 	h, err := r.Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -192,7 +205,7 @@ func reachServe(t *testing.T, rt reachRoute, c reachCaller) *httptest.ResponseRe
 	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	return rec
+	return rec, e
 }
 
 // TestReach_CallersHoldTheScopesTheyAreNamedFor guards the fixture: a catalog
@@ -285,5 +298,41 @@ func TestReach_RouteTableAsksWhatTheCellsAssume(t *testing.T) {
 	}
 	if seen != len(want) {
 		t.Errorf("%d of %d routes seen", seen, len(want))
+	}
+}
+
+// TestReach_BackstopHoldsWhenTheRouteIsMountedWeaker mounts every changed route
+// with a deliberately weaker Perm (rbac.AnyAuthenticated: a signed-in caller
+// passes stage 13) and serves each caller the real Perm refuses. The handler's
+// own backstop (api.guardPerm, with the same instancePerm/managePerm value
+// Register hands the route) must still turn that caller away, as a 403 the
+// handler writes (no required_permission: that member is the router's), before
+// the instance is read or changed. It is what stops a mounting mistake from
+// widening access, and it is what the route-only cells above cannot see.
+func TestReach_BackstopHoldsWhenTheRouteIsMountedWeaker(t *testing.T) {
+	weak := func(g *httpapi.Group, a *api) {
+		mount(g, a, routePerms{read: rbac.AnyAuthenticated, instance: rbac.AnyAuthenticated, manage: rbac.AnyAuthenticated})
+	}
+	for _, rt := range reachRoutes() {
+		t.Run(rt.name, func(t *testing.T) {
+			for _, f := range rt.refused {
+				t.Run(f.caller.name, func(t *testing.T) {
+					rec, e := reachServeWith(t, rt, f.caller, weak)
+					if rec.Code != http.StatusForbidden {
+						t.Fatalf("%s %s as %s = %d %s, want the backstop's 403", rt.method, rt.path, f.caller.name, rec.Code, rec.Body.String())
+					}
+					var p httpapi.Problem
+					if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+						t.Fatalf("problem %q: %v", rec.Body.String(), err)
+					}
+					if p.Code != "permission_denied" || p.Required != "" {
+						t.Errorf("problem = code %q required %q, want the handler's permission_denied (the router names required_permission)", p.Code, p.Required)
+					}
+					if _, ok := e.reg.Config(integrations.Ref{Kind: integrations.KindNotify, Instance: roofID}); !ok {
+						t.Error("the instance is gone: the handler acted before the backstop")
+					}
+				})
+			}
+		})
 	}
 }
