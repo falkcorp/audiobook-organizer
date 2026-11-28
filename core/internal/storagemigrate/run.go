@@ -305,6 +305,16 @@ func (r *Runner) verify(ctx context.Context, sks storage.Keyspace, src source, m
 		return err
 	}
 	mg.setState(state)
+	// The report's counts, once per Verify that returned, on done and failed
+	// alike: the prod-copy rehearsal reads M3's, M4's and M5's numbers from this
+	// line, so the message and the four keys are a contract (rehearse.py
+	// VERIFIED_MSG). Counts only, never a key or a value from a row. A stopping
+	// boot returned above and logs nothing, and a migration with no Verify has no
+	// counts to report, so a zero here is always a count Verify made.
+	if mg.m.Verify != nil {
+		r.opts.Logger.Info("storagemigrate: data migration verified", "migration", id,
+			"read", rep.Read, "written", rep.Written, "quarantined", rep.Quarantined)
+	}
 	if state == datamigrate.StateDone {
 		r.opts.Logger.Info("storagemigrate: data migration done", "migration", id)
 		return nil
