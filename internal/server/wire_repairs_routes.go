@@ -278,16 +278,16 @@ func (s *Server) newRepairsOpAccess(holds func(c *gin.Context, p auth.Permission
 // the roles alone; a stamped empty set (non-nil, empty) is a request that held
 // nothing, and caps the job at nothing. An op with no actor, an actor that no
 // longer exists or is not active, or a store failure, holds nothing.
+//
+// This is the resolver for a server NOT under core identity, where the account
+// is a books record. Under core identity opActorHolds resolves the actor with
+// opActorPermissionsCore instead, which returns its errors: a read failure there
+// must fail the job, not become the empty set this function's fail-closed
+// contract returns. Nothing under identity may call this (it reads books' user
+// rows, which M3 drains).
 func (s *Server) opActorPermissions(ctx context.Context, row *database.OperationV2Row) map[auth.Permission]bool {
 	held := map[auth.Permission]bool{}
 	if row == nil || row.ActorUserID == nil {
-		return held
-	}
-	if s.identity != nil {
-		held, err := s.opActorPermissionsCore(ctx, row)
-		if err != nil {
-			return map[auth.Permission]bool{}
-		}
 		return held
 	}
 	store := s.storeForWiring()
