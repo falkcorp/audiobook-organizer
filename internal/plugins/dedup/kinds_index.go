@@ -235,6 +235,15 @@ func (p *Plugin) purgeLegacyFPNative(d IndexKindDeps, sched func(tasks.Kind) *ta
 // windowIndexBuildNative is the native dedup.window-index-build kind. Preview is
 // HEAD's default preview (dry_run omitted); Live builds the rows and the flag.
 func (p *Plugin) windowIndexBuildNative(d IndexKindDeps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	return p.windowIndexBuildNativeTimeout(d, sched, windowIndexBuildTimeout)
+}
+
+// windowIndexBuildTimeout is the native kind's per-attempt timeout (HEAD's).
+const windowIndexBuildTimeout = 180 * time.Minute
+
+// windowIndexBuildNativeTimeout is windowIndexBuildNative with the attempt
+// timeout as a parameter, so a test can stop the run by its own timeout.
+func (p *Plugin) windowIndexBuildNativeTimeout(d IndexKindDeps, sched func(tasks.Kind) *tasks.Schedule, timeout time.Duration) tasks.Definition {
 	c := kindCommon(windowIndexBuildKind, sched, false)
 	c.Title = "Build window-print index"
 	c.Help = windowIndexBuildHelp
@@ -250,7 +259,7 @@ func (p *Plugin) windowIndexBuildNative(d IndexKindDeps, sched func(tasks.Kind) 
 	c.Resume = tasks.ResumeFromZero
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.dedup.window-index")
-	c.Timeout = 180 * time.Minute
+	c.Timeout = timeout
 	return tasks.Task(windowIndexBuildKind, tasks.TaskSpec[json.RawMessage, windowIndexBuildResult]{
 		Common: c,
 		Run: func(rc *tasks.RC, raw json.RawMessage) (windowIndexBuildResult, error) {
