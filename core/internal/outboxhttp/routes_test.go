@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/mediacore/events"
 	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/internal/authz"
 	"github.com/falkcorp/mediacore/internal/outboxstore"
 	"github.com/falkcorp/mediacore/outbox"
 	"github.com/falkcorp/mediacore/rbac"
@@ -518,30 +519,28 @@ type stage13Caller struct {
 	scopes    []rbac.Permission
 }
 
-// held is the rbac.Checker of a caller that holds exactly the scopes given: what
-// Service.Compile builds from roles at F4-08, as far as these routes can tell.
-type held []rbac.Permission
-
-func (h held) Has(s rbac.Permission) bool { return slices.Contains(h, s) }
-
-func (h held) Satisfies(r rbac.Requirement) bool {
-	switch r.Kind() {
-	case rbac.KindAuthenticated:
-		return true
-	case rbac.KindAllOf:
-		return !slices.ContainsFunc(r.Permissions(), func(p rbac.Permission) bool { return !h.Has(p) })
-	case rbac.KindAnyOf:
-		return slices.ContainsFunc(r.Permissions(), h.Has)
-	}
-	return false
-}
-
-func (h held) Confined() bool              { return false }
-func (h held) Concrete() []rbac.Permission { return slices.Clone(h) }
-
-func (c stage13Caller) principal() *auth.Principal {
+// principal builds the principal stage 12 binds for the caller: the checker is
+// the one Service.Compile builds from the roles' patterns (an API key is the
+// same patterns narrowed to its scopes, a session is interactive, the auth-off
+// principal holds only what is neither AuthRequired nor Sensitive), so a cell
+// is judged by the real rbac catalog and not by a stand-in that agrees with the
+// route by construction.
+func (c stage13Caller) principal(cat *rbac.Catalog) *auth.Principal {
 	p := bruce()
-	p.Method, p.Perms = c.method, held(c.scopes)
+	p.Method = c.method
+	switch c.method {
+	case auth.MethodAuthDisabled:
+		p.User, p.CredentialID = nil, ""
+		p.Perms = authz.AuthDisabled(cat)
+	case auth.MethodAPIKey:
+		p.Perms = authz.Compile(rbac.CompileInput{
+			Scopes: slices.Clone(c.scopes), RolePatterns: slices.Clone(c.scopes),
+		}, cat)
+	default:
+		p.Perms = authz.Compile(rbac.CompileInput{
+			Interactive: c.method.Interactive(), RolePatterns: slices.Clone(c.scopes),
+		}, cat)
+	}
 	return p
 }
 
@@ -554,39 +553,163 @@ var (
 	managerOff = stage13Caller{name: "manage with auth off", method: auth.MethodAuthDisabled, scopes: []rbac.Permission{permManage}}
 )
 
-// letThrough is the want of a cell the route lets through: neither 401 nor 403,
-// whatever the handler then answers (these cells name consumers that need not exist).
-const letThrough = 0
+// stage12 stands in for auth.Service's stage 12: it binds the principal the
+// caller carries into the request context with auth.WithPrincipal, which is all
+// stage 12 does for a request that presented a valid credential, and binds
+// nothing for an anonymous one. The router wraps it around stage 13 itself
+// (Router.SetAuth), so a cell reaches the permission and the guards only
+// through the chain a booted core serves.
+type stage12 struct{ p *auth.Principal }
 
-// stage13Do serves one request to the real routes, built into a router over a
-// live outbox, as caller. It is the body of every stage-13 cell: Build refuses
-// non-Public routes until F4-08 brings the auth service, so no cell reaches it
-// before then, and a cell that is un-skipped before then fails here, on Build.
-func stage13Do(t *testing.T, method, path string, c stage13Caller) *httptest.ResponseRecorder {
+func (s stage12) Middleware() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if s.p != nil {
+				r = r.WithContext(auth.WithPrincipal(r.Context(), s.p))
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func (stage12) SessionCookie(_ auth.ClientInfo, _ string, _ time.Time) *http.Cookie {
+	return &http.Cookie{Name: "hello_session", Path: "/", MaxAge: -1}
+}
+
+// denials is the audit.Logger stage 13 writes its core.permission.deny rows to:
+// it keeps each Emit, which is all stage 13 calls.
+type denials struct {
+	mu     sync.Mutex
+	events []audit.Event
+}
+
+func (d *denials) Record(context.Context, audit.Event) error {
+	panic("stage 13 emits its refusals, it never records one")
+}
+
+func (d *denials) RecordIn(context.Context, *storage.Batch, audit.Event) error {
+	panic("stage 13 emits its refusals, it never records one in a batch")
+}
+
+func (d *denials) Emit(_ context.Context, e audit.Event) {
+	d.mu.Lock()
+	d.events = append(d.events, e)
+	d.mu.Unlock()
+}
+
+func (d *denials) all() []audit.Event {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Clone(d.events)
+}
+
+// stage13Want is what a cell expects of the answer. A refusal names its status,
+// its problem code and, for a permission_denied, the scope it names; letThrough
+// is the zero value and wants neither 401 nor 403.
+type stage13Want struct {
+	status   int
+	code     string
+	required string
+}
+
+var (
+	letThrough = stage13Want{}
+	// unauthenticated is stage 13's answer to a request stage 12 bound nobody to.
+	unauthenticated = stage13Want{http.StatusUnauthorized, "authentication_required", ""}
+	// interactiveOnly is a Guards.Interactive refusal.
+	interactiveOnly = stage13Want{http.StatusForbidden, "interactive_required", ""}
+)
+
+// lacking is the 403 of a caller who does not hold scope.
+func lacking(scope rbac.Permission) stage13Want {
+	return stage13Want{http.StatusForbidden, "permission_denied", string(scope)}
+}
+
+// stage13Result is one cell's answer and the refusal rows the router emitted.
+type stage13Result struct {
+	rec     *httptest.ResponseRecorder
+	denials []audit.Event
+	env     *env
+}
+
+// stage13Do serves one request to the real routes, built into a router whose
+// stages 12 and 13 are wired as a booted core wires them (Router.SetAuth:
+// stage 12, the rbac catalog, the Sensitive rule, the deny audit), over a live
+// outbox, as caller.
+func stage13Do(t *testing.T, method, path string, c stage13Caller) stage13Result {
 	t.Helper()
+	cat, err := rbac.NewCatalog(rbac.CoreScopes()...)
+	if err != nil {
+		t.Fatalf("catalog: %v", err)
+	}
 	e := newEnv(t)
+	var p *auth.Principal
+	if !c.anonymous {
+		p = c.principal(cat)
+	}
+	deny := &denials{}
 	r := httpapi.NewRouter(httpapi.Options{}, httpapi.Deps{Log: discardLogger()})
+	if err := r.SetAuth(httpapi.AuthWiring{
+		Service: stage12{p: p}, Catalog: cat, Audit: deny, Log: discardLogger(),
+		OwnerRequired: func() bool { return true },
+	}); err != nil {
+		t.Fatalf("SetAuth: %v", err)
+	}
 	Register(r.CoreGroup(), e.ob, e.cat, e.aud, WithLogger(discardLogger()))
 	h, err := r.Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	req := httptest.NewRequest(method, "/api/core/v1"+path, nil)
-	if !c.anonymous {
-		req = req.WithContext(auth.WithPrincipal(req.Context(), c.principal()))
-	}
+	req.RemoteAddr = "192.0.2.10:4000"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	return rec
+	return stage13Result{rec: rec, denials: deny.all(), env: e}
 }
 
-func wantStage13(t *testing.T, rec *httptest.ResponseRecorder, want int) {
+// wantStage13 judges a cell: a refusal by its status, its problem code and the
+// scope it names, and by the one core.permission.deny row stage 13 emits for a
+// 403 (and none for a 401); a route let through by neither 401 nor 403 and no
+// deny row. A refused request never reaches the handler, so it also leaves no
+// outbox audit record behind.
+func wantStage13(t *testing.T, res stage13Result, want stage13Want) {
 	t.Helper()
+	rec := res.rec
+	if want == letThrough {
+		if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
+			t.Errorf("status = %d (%s), want the route to let the caller through", rec.Code, rec.Body.String())
+		}
+		if len(res.denials) != 0 {
+			t.Errorf("a request the route let through emitted deny rows %+v", res.denials)
+		}
+		return
+	}
+	if rec.Code != want.status {
+		t.Fatalf("status = %d (%s), want %d %s", rec.Code, rec.Body.String(), want.status, want.code)
+	}
+	var prob struct {
+		Code               string `json:"code"`
+		RequiredPermission string `json:"required_permission"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &prob); err != nil {
+		t.Fatalf("problem body %q: %v", rec.Body.String(), err)
+	}
+	if prob.Code != want.code || prob.RequiredPermission != want.required {
+		t.Errorf("problem = %q (required_permission %q), want %q (%q)", prob.Code, prob.RequiredPermission, want.code, want.required)
+	}
 	switch {
-	case want == letThrough && (rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden):
-		t.Errorf("status = %d (%s), want the route to let the caller through", rec.Code, rec.Body.String())
-	case want != letThrough && rec.Code != want:
-		t.Errorf("status = %d (%s), want %d", rec.Code, rec.Body.String(), want)
+	case want.status == http.StatusUnauthorized && len(res.denials) != 0:
+		t.Errorf("a 401 emitted deny rows %+v", res.denials)
+	case want.status == http.StatusForbidden && len(res.denials) != 1:
+		t.Errorf("a 403 emitted %d deny rows %+v, want exactly one", len(res.denials), res.denials)
+	case want.status == http.StatusForbidden:
+		d := res.denials[0]
+		if d.Action != "core.permission.deny" || d.Outcome != audit.Denied || d.Reason != want.code || d.Permission != want.required {
+			t.Errorf("deny row = %+v, want core.permission.deny / denied / reason %q / permission %q", d, want.code, want.required)
+		}
+	}
+	if n := len(res.env.records()); n != 0 {
+		t.Errorf("a refused request left %d outbox audit records: the handler ran", n)
 	}
 }
 
@@ -594,9 +717,7 @@ func wantStage13(t *testing.T, rec *httptest.ResponseRecorder, want int) {
 // dead-letter writes answer 401 with no principal, 403 to a holder of
 // core:system.view alone, and let a holder of core:system.manage through; the
 // purge's own table (it also has the interactive guard) is
-// TestOutboxHTTP_PurgeNeedsInteractive. Route permission (stage 13) arrives at
-// F4-08, so each cell skips; F6-03, which mounts the package, un-skips them with
-// no other change (the bodies are written).
+// TestOutboxHTTP_PurgeNeedsInteractive.
 func TestOutboxHTTP_DeadLetterRoutesNeedSystemManage(t *testing.T) {
 	for _, c := range []struct {
 		name, method, path string
@@ -606,13 +727,12 @@ func TestOutboxHTTP_DeadLetterRoutesNeedSystemManage(t *testing.T) {
 		{"discard", http.MethodDelete, "/outbox/dead/core.notify.deliver/1"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			t.Skip("needs stage 13: F4-08")
 			for _, cell := range []struct {
 				caller stage13Caller
-				want   int
+				want   stage13Want
 			}{
-				{noCaller, http.StatusUnauthorized},
-				{viewer, http.StatusForbidden},
+				{noCaller, unauthenticated},
+				{viewer, lacking(permManage)},
 				{manager, letThrough},
 			} {
 				t.Run(cell.caller.name, func(t *testing.T) {
@@ -624,26 +744,29 @@ func TestOutboxHTTP_DeadLetterRoutesNeedSystemManage(t *testing.T) {
 }
 
 // TestOutboxHTTP_PurgeNeedsInteractive: the purge answers 401 with no principal,
-// 403 to a holder of core:system.view alone, 403 to a holder of
-// core:system.manage whose credential is not an interactive one (an API key, a
-// delegated session, the auth-off principal: Guards.Interactive), and lets an
-// interactive session holding core:system.manage through. Skipped until stage 13
-// (F4-08).
+// 403 permission_denied to an interactive session holding core:system.view
+// alone, 403 interactive_required to a holder of core:system.manage whose
+// credential may not change credentials (an API key, the auth-off principal:
+// Guards.Interactive), and lets through a session holding core:system.manage
+// and a delegated session holding it (a delegated session may change
+// credentials, owner ruling 2026-11-06).
 func TestOutboxHTTP_PurgeNeedsInteractive(t *testing.T) {
 	const path = "/outbox/consumers/core.notify.deliver/backlog"
 	for _, cell := range []struct {
 		caller stage13Caller
-		want   int
+		want   stage13Want
 	}{
-		{noCaller, http.StatusUnauthorized},
-		{viewer, http.StatusForbidden},
-		{managerKey, http.StatusForbidden},
-		{managerABS, http.StatusForbidden},
-		{managerOff, http.StatusForbidden},
+		{noCaller, unauthenticated},
+		{viewer, lacking(permManage)},
+		{managerKey, interactiveOnly},
+		// A delegated session (temp-login, invite) may change credentials and so
+		// passes Guards.Interactive (owner ruling 2026-11-06, core/auth/method.go):
+		// it holds core:system.manage, so the purge is let through, as at HEAD.
+		{managerABS, letThrough},
+		{managerOff, interactiveOnly},
 		{manager, letThrough},
 	} {
 		t.Run(cell.caller.name, func(t *testing.T) {
-			t.Skip("needs stage 13: F4-08")
 			wantStage13(t, stage13Do(t, http.MethodDelete, path, cell.caller), cell.want)
 		})
 	}
@@ -651,7 +774,7 @@ func TestOutboxHTTP_PurgeNeedsInteractive(t *testing.T) {
 
 // TestOutboxHTTP_ConsumersAndTopicsNeedSystemView: both read routes answer 401
 // with no principal, 403 to a caller holding neither scope, and let a holder of
-// core:system.view through. Skipped until stage 13 (F4-08).
+// core:system.view through.
 func TestOutboxHTTP_ConsumersAndTopicsNeedSystemView(t *testing.T) {
 	nothing := stage13Caller{name: "no scope", method: auth.MethodSession}
 	for _, c := range []struct{ name, path string }{
@@ -659,13 +782,12 @@ func TestOutboxHTTP_ConsumersAndTopicsNeedSystemView(t *testing.T) {
 		{"topics", "/events/topics"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			t.Skip("needs stage 13: F4-08")
 			for _, cell := range []struct {
 				caller stage13Caller
-				want   int
+				want   stage13Want
 			}{
-				{noCaller, http.StatusUnauthorized},
-				{nothing, http.StatusForbidden},
+				{noCaller, unauthenticated},
+				{nothing, lacking(permView)},
 				{viewer, letThrough},
 			} {
 				t.Run(cell.caller.name, func(t *testing.T) {
