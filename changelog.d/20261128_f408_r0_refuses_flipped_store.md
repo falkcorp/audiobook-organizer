@@ -1,0 +1,3 @@
+### Changed
+
+- CI/tests: `TestR0OpensR1Store` (the R0 release binary opens a store this build wrote) is replaced by `TestR0RefusesPostFlipStore`. After the identity switch a binary swap back to R0 is not a supported rollback (`make rollback` refuses; the path is `make rollback-restore`, the pre-upgrade checkpoint plus the old binary), so the check now runs R0's own `serve` over a store this build has switched and requires R0 to refuse it with its error status, name the reason, and leave every row and every file beside the store unchanged. `boot-crash-matrix-abo` requires the new cell's PASS line; the R0 download and its CI cache stay.
