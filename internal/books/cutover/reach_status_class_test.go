@@ -201,6 +201,20 @@ func TestRecordedPrincipalsAreTheRecording(t *testing.T) {
 			t.Errorf("logoutAnswers200 names %q, which verdicts.json does not record", name)
 		}
 	}
+	// The sessions list's rows reuse logoutAnswers200: R0 answered it as it answered
+	// logout, cell for cell, the auth-disabled principal apart (logout 200, the
+	// sessions list 401).
+	byKey := map[string]r0Route{}
+	for _, rt := range r0.Routes {
+		byKey[rt.key()] = rt
+	}
+	logout, sessions := byKey["POST /api/v1/auth/logout"], byKey["GET /api/v1/auth/sessions"]
+	n := len(recordedPrincipals)
+	if len(logout.Status) != n+1 || len(sessions.Status) != n+1 || !slices.Equal(logout.Status[:n], sessions.Status[:n]) {
+		t.Errorf("R0 answered logout %v and the sessions list %v: logoutAnswers200 is not the sessions list's set", logout.Status, sessions.Status)
+	} else if sessions.Status[n] != http.StatusUnauthorized {
+		t.Errorf("R0 answered the auth-disabled principal's sessions list %d, want 401", sessions.Status[n])
+	}
 }
 
 // TestRecordedEnvironment_RestoresTheGlobalsItChanges: the environment a boot of the

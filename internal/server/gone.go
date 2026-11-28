@@ -9,6 +9,9 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
+	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
 // gone returns the handler for a route that has been retired. It answers 410
@@ -32,5 +35,21 @@ func gone(replacement string) gin.HandlerFunc {
 	}
 	return func(c *gin.Context) {
 		c.JSON(http.StatusGone, gin.H{"error": "gone", "message": message})
+	}
+}
+
+// goneToAUser is gone for a route whose live handler refused a caller with no
+// user (the auth-disabled principal) before anything else, as HEAD's own
+// account routes do (legacyauth.RespondNoUser, 401). That refusal is kept, so
+// the set of callers the route refuses is the live handler's, and only a
+// caller the live handler answered learns that the route is gone.
+func goneToAUser(replacement string) gin.HandlerFunc {
+	retired := gone(replacement)
+	return func(c *gin.Context) {
+		if _, ok := servermiddleware.CurrentUser(c); !ok {
+			legacyauth.RespondNoUser(c, "not authenticated")
+			return
+		}
+		retired(c)
 	}
 }

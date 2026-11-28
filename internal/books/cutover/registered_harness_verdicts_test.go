@@ -145,6 +145,7 @@ var verdictRows = []verdictRow{
 	{Method: "POST", Route: "/api/v1/auth/accept-invite", Class: classKnown, Principals: append(slices.Clone(recordedPrincipals), Authoff), Why: goneUnderIdentityWhy + " (R0: 400)"},
 	{Method: "POST", Route: "/api/v1/auth/setup", Class: classKnown, Principals: append(slices.Clone(recordedPrincipals), Authoff), Why: goneUnderIdentityWhy + " (R0: 400)"},
 	{Method: "POST", Route: "/api/v1/auth/logout", Class: classKnown, Principals: append(slices.Clone(logoutAnswers200), Authoff), Why: goneUnderIdentityWhy + " (R0: 200)"},
+	{Method: "GET", Route: "/api/v1/auth/sessions", Class: classKnown, Principals: slices.Clone(logoutAnswers200), Why: goneUnderIdentityWhy + " (R0: 200; the auth-disabled principal is refused as at R0)"},
 	{Method: "POST", Route: "/api/v1/auth/api-keys/:id/rotate", Class: classKnown, Principals: registeredRetiredRotate.rows[0].who,
 		Why: "retired stub: 410 to every caller once the credential guard is gone (approved reach contract 11-22; R0's 403 was HEAD's credential guard in front of the 410; nothing is minted); the oracle's registeredRetiredRotate holds the same 35 cells"},
 	{Method: "POST", Route: "/api/v1/update/apply", Class: classKnown, Principals: []string{"session:admin"}, Why: updateApplyStateWhy},

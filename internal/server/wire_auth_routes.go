@@ -95,7 +95,17 @@ func (s *Server) wireAuthRoutes(
 			authProtected.POST("/logout", authH.Logout)
 		}
 		// The sessions list returns revoke handles, never session IDs (the ID is the bearer token; 05-authn §11.1 item 1); DELETE /sessions/:id takes a handle.
-		authProtected.GET("/sessions", authH.ListMySessions)
+		if s.identity != nil {
+			// Under core identity the sessions are core's: HEAD's list read the
+			// books session family M3 drained and answered 200 with an empty
+			// list while the caller's core sessions were live. The route
+			// answers 410 instead and names core's list. A caller with no user
+			// (the auth-disabled principal) is refused 401 first, as HEAD's
+			// handler refused it.
+			authProtected.GET("/sessions", goneToAUser("GET /api/core/v1/me/sessions"))
+		} else {
+			authProtected.GET("/sessions", authH.ListMySessions)
+		}
 		authProtected.DELETE("/sessions/:id", authH.RevokeMySession)
 		s.credRoute(authProtected, http.MethodPut, "/me/password", authH.ChangePassword)
 		// The guest's one-time phone-app key under core identity: the page calls it
