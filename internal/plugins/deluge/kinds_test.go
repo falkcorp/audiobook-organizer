@@ -420,7 +420,7 @@ func (c *fakeClient) ListTorrentDetailsByLabel(label string) ([]delugeclient.Tor
 	return slices.Clone(c.torrents), nil
 }
 
-func (c *fakeClient) MoveStorage(ids []string, dest string) error {
+func (c *fakeClient) MoveStorage(_ context.Context, ids []string, dest string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, id := range ids {

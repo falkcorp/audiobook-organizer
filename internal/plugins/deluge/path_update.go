@@ -78,7 +78,9 @@ type pathUpdateStore interface {
 // storageMover is the one Deluge call the core makes: core.move_storage. It is
 // not a store write; it stays in the core (F5-05 brief).
 type storageMover interface {
-	MoveStorage(torrentIDs []string, destPath string) error
+	// MoveStorage is bound to ctx, so a Deluge call that hangs cannot outlive
+	// the run that made it.
+	MoveStorage(ctx context.Context, torrentIDs []string, destPath string) error
 }
 
 // pathUpdateCoreParams is the core's params: HEAD's pathUpdateParams without
@@ -139,7 +141,7 @@ func moveWithRetry(ctx context.Context, env pathUpdateEnv, hash, dir string) err
 	}
 	var err error
 	for attempt := 1; attempt <= moveAttempts; attempt++ {
-		if err = env.Mover.MoveStorage([]string{hash}, dir); err == nil {
+		if err = env.Mover.MoveStorage(ctx, []string{hash}, dir); err == nil {
 			return nil
 		}
 		if !delugeclient.IsTransient(err) || attempt == moveAttempts {
@@ -241,8 +243,11 @@ func pathUpdateCore(ctx context.Context, args pathUpdateCoreParams, env pathUpda
 			return nil // skip non-Deluge or inactive versions
 		}
 
+		// With a target, every torrent of the original follows the copy's
+		// directory, as the base's NotifyDelugeAfterOrganize sent each one to
+		// Dir(newPath): a version folder is for a book organized in place.
 		var dir string
-		if activeCount == 1 {
+		if activeCount == 1 || args.TargetBookID != "" {
 			dir = primaryDir
 		} else {
 			dir = filepath.Join(primaryDir, ".versions", v.ID)
