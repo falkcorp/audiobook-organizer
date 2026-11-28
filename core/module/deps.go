@@ -7,6 +7,7 @@ package module
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"iter"
 	"log/slog"
@@ -180,6 +181,37 @@ type Deps struct {
 	// health.ErrNotOwned for any other ID. It is never nil. The registrations are
 	// taken at P7, so a Reporter call before then returns ErrHealthNotBound.
 	Health health.Reporters
+
+	// TaskRows is the module's read of the stored runs and rows of its OWN
+	// registered kinds, and the one row write HEAD's maintenance jobs make
+	// (ReplaceRows, their class lists). It is what a module needs to carry its
+	// pre-flip run-state code onto the native engine (the maintenance runs
+	// ledger and the repairs shell's plan rows) without the whole run store: a
+	// run of any other module's kind, and a query naming one, is refused with
+	// ErrTaskRowsForeign. It is never nil, but the store behind it is built at
+	// P7 and only when the app runs a task engine: a call before then returns
+	// ErrTaskRowsNotBound.
+	TaskRows TaskRows
+}
+
+// TaskRows is Deps.TaskRows (see there). Every method that names a run takes the
+// run's kind from the store and refuses one that is not the module's.
+type TaskRows interface {
+	// List is RunStore.List over the module's kinds: an empty q.Kinds is every
+	// kind the module registered, and a kind it did not register is refused.
+	List(ctx context.Context, q tasks.RunQuery) iter.Seq2[tasks.RunRecord, error]
+	// Rows yields a run's stored rows in row-ID order.
+	Rows(ctx context.Context, id tasks.RunID) iter.Seq2[tasks.Row, error]
+	// ReplaceRows is RunStore.ReplaceRows: it makes the run's rows whose IDs
+	// begin with prefix exactly the n rows at(0)..at(n-1), refused once the run
+	// is terminal. Only the module's own runs.
+	ReplaceRows(ctx context.Context, id tasks.RunID, prefix string, n int, at func(i int) (tasks.Row, error)) error
+	// PlanOf is the id of the plan run the apply run applies (its plan_ref).
+	PlanOf(ctx context.Context, applyRun tasks.RunID) (plan string, err error)
+	// PlannedRow is the stored State of one planned row of the apply run's
+	// plan, as the plan run stored it; found is false when the plan holds no
+	// such row. Both runs must be the module's.
+	PlannedRow(ctx context.Context, applyRun tasks.RunID, rowID string) (state json.RawMessage, found bool, err error)
 }
 
 // RefreshFunc is Deps.AuthRefresh: auth.Service.Refresh. It has the underlying
@@ -263,6 +295,14 @@ var ErrStopped = errors.New("module: app stopped")
 // ErrTasksNotBound is what Deps.Tasks returns while the kernel has no task
 // engine for the module: before P7 builds it, or in an app that runs none.
 var ErrTasksNotBound = errors.New("module: Deps.Tasks is not bound: the task engine is built at P7 and only when the app runs one")
+
+// ErrTaskRowsNotBound is what Deps.TaskRows returns while the kernel has no task
+// store for the module: before P7 builds it, or in an app that runs no engine.
+var ErrTaskRowsNotBound = errors.New("module: Deps.TaskRows is not bound: the task engine is built at P7 and only when the app runs one")
+
+// ErrTaskRowsForeign is what Deps.TaskRows returns for a run, or a query, of a
+// kind the module did not register.
+var ErrTaskRowsForeign = errors.New("module: Deps.TaskRows serves only runs of the module's own kinds")
 
 // ErrHealthNotBound is what Deps.Health.Reporter returns before the kernel has
 // taken the module's Registrar.Health declarations at P7.

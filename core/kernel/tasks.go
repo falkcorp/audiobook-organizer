@@ -298,6 +298,13 @@ func (k *Kernel) bindModuleTasks(x tasks.Executor) error {
 			return fmt.Errorf("kernel: tasks: client of module %s: %w", e.man.ID, err)
 		}
 		e.tasksDep.bind(c)
+		if e.rowsDep != nil {
+			kinds := make([]tasks.Kind, 0, len(e.rec.Tasks))
+			for _, d := range e.rec.Tasks {
+				kinds = append(kinds, d.Kind())
+			}
+			e.rowsDep.bind(k.tasks.stores.Runs, kinds)
+		}
 	}
 	return nil
 }

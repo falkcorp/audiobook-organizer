@@ -7,11 +7,16 @@ package kernel
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"iter"
+	"slices"
+	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/falkcorp/mediacore/health"
+	"github.com/falkcorp/mediacore/internal/executor"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -152,4 +157,177 @@ func (l *moduleHealth) Reporter(id health.ComponentID) (health.Reporter, error) 
 		return r, nil
 	}
 	return nil, fmt.Errorf("%w: %s", health.ErrNotOwned, id)
+}
+
+// moduleTaskRows is one module's Deps.TaskRows: the run store narrowed to the
+// module's own registered kinds. Like moduleTasks it is bound at P7 and read
+// atomically; until then every call returns module.ErrTaskRowsNotBound.
+type moduleTaskRows struct {
+	bound atomic.Pointer[boundTaskRows]
+}
+
+// boundTaskRows is the P7 state: the store, the module's own kinds, and a small
+// cache of the plans it read.
+type boundTaskRows struct {
+	runs  tasks.RunStore
+	kinds map[tasks.Kind]bool
+	own   []tasks.Kind // sorted, the kinds an empty query means
+
+	mu    sync.Mutex
+	plans map[tasks.RunID]map[string]json.RawMessage // terminal plan runs' rows by Row.ID
+}
+
+// maxCachedPlans bounds the plan cache: an apply reads one plan, and a point
+// read per applied row would otherwise scan the plan's rows each time.
+const maxCachedPlans = 4
+
+var _ module.TaskRows = (*moduleTaskRows)(nil)
+
+// bind hands the handle the run store and the kinds the module registered.
+func (l *moduleTaskRows) bind(runs tasks.RunStore, kinds []tasks.Kind) {
+	b := &boundTaskRows{runs: runs, kinds: make(map[tasks.Kind]bool, len(kinds)), plans: map[tasks.RunID]map[string]json.RawMessage{}}
+	for _, k := range kinds {
+		b.kinds[k] = true
+	}
+	b.own = slices.Sorted(func(yield func(tasks.Kind) bool) {
+		for k := range b.kinds {
+			if !yield(k) {
+				return
+			}
+		}
+	})
+	l.bound.Store(b)
+}
+
+func (l *moduleTaskRows) get() (*boundTaskRows, error) {
+	b := l.bound.Load()
+	if b == nil {
+		return nil, module.ErrTaskRowsNotBound
+	}
+	return b, nil
+}
+
+// record reads run id and refuses it unless its kind is the module's.
+func (b *boundTaskRows) record(ctx context.Context, id tasks.RunID) (tasks.RunRecord, error) {
+	rec, err := b.runs.Get(ctx, id)
+	if err != nil {
+		return tasks.RunRecord{}, err
+	}
+	if !b.kinds[rec.Kind] {
+		return tasks.RunRecord{}, fmt.Errorf("%w: run %s", module.ErrTaskRowsForeign, id)
+	}
+	return rec, nil
+}
+
+func (l *moduleTaskRows) List(ctx context.Context, q tasks.RunQuery) iter.Seq2[tasks.RunRecord, error] {
+	fail := func(err error) iter.Seq2[tasks.RunRecord, error] {
+		return func(yield func(tasks.RunRecord, error) bool) { yield(tasks.RunRecord{}, err) }
+	}
+	b, err := l.get()
+	if err != nil {
+		return fail(err)
+	}
+	for _, k := range q.Kinds {
+		if !b.kinds[k] {
+			return fail(fmt.Errorf("%w: kind %s", module.ErrTaskRowsForeign, k))
+		}
+	}
+	if len(q.Kinds) == 0 {
+		q.Kinds = b.own
+	}
+	return b.runs.List(ctx, q)
+}
+
+func (l *moduleTaskRows) Rows(ctx context.Context, id tasks.RunID) iter.Seq2[tasks.Row, error] {
+	fail := func(err error) iter.Seq2[tasks.Row, error] {
+		return func(yield func(tasks.Row, error) bool) { yield(tasks.Row{}, err) }
+	}
+	b, err := l.get()
+	if err != nil {
+		return fail(err)
+	}
+	if _, err := b.record(ctx, id); err != nil {
+		return fail(err)
+	}
+	return b.runs.Rows(ctx, id)
+}
+
+func (l *moduleTaskRows) ReplaceRows(ctx context.Context, id tasks.RunID, prefix string, n int, at func(i int) (tasks.Row, error)) error {
+	b, err := l.get()
+	if err != nil {
+		return err
+	}
+	if _, err := b.record(ctx, id); err != nil {
+		return err
+	}
+	return b.runs.ReplaceRows(ctx, id, prefix, n, at)
+}
+
+func (l *moduleTaskRows) PlanOf(ctx context.Context, applyRun tasks.RunID) (string, error) {
+	b, err := l.get()
+	if err != nil {
+		return "", err
+	}
+	rec, err := b.record(ctx, applyRun)
+	if err != nil {
+		return "", err
+	}
+	return string(rec.PlanRef), nil
+}
+
+func (l *moduleTaskRows) PlannedRow(ctx context.Context, applyRun tasks.RunID, rowID string) (json.RawMessage, bool, error) {
+	b, err := l.get()
+	if err != nil {
+		return nil, false, err
+	}
+	rec, err := b.record(ctx, applyRun)
+	if err != nil {
+		return nil, false, err
+	}
+	if rec.PlanRef == "" {
+		return nil, false, fmt.Errorf("%w: apply run %s names no plan", executor.ErrPlanRequired, applyRun)
+	}
+	rows, err := b.plan(ctx, rec.PlanRef)
+	if err != nil {
+		return nil, false, err
+	}
+	state, found := rows[rowID]
+	return state, found, nil
+}
+
+// plan is the stored State of every row of plan run id, by Row.ID. The plan
+// run must be the module's; its rows are cached only once it is terminal, when
+// they can no longer change (ReplaceRows is refused on a terminal run).
+func (b *boundTaskRows) plan(ctx context.Context, id tasks.RunID) (map[string]json.RawMessage, error) {
+	b.mu.Lock()
+	rows, ok := b.plans[id]
+	b.mu.Unlock()
+	if ok {
+		return rows, nil
+	}
+	rec, err := b.record(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	rows = map[string]json.RawMessage{}
+	for row, err := range b.runs.Rows(ctx, id) {
+		if err != nil {
+			return nil, err
+		}
+		if rid, ok := strings.CutPrefix(row.ID, executor.PlanRowStoredID("")); ok {
+			rows[rid] = row.State
+		}
+	}
+	if rec.State.Terminal() {
+		b.mu.Lock()
+		if len(b.plans) >= maxCachedPlans {
+			for k := range b.plans {
+				delete(b.plans, k)
+				break
+			}
+		}
+		b.plans[id] = rows
+		b.mu.Unlock()
+	}
+	return rows, nil
 }

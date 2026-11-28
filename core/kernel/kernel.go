@@ -394,6 +394,7 @@ type entry struct {
 	// and Deps.Health, built at P6 and bound at P7 (module_tasks.go); nil for
 	// a disabled module, which never ran Register.
 	tasksDep  *moduleTasks
+	rowsDep   *moduleTaskRows
 	healthDep *moduleHealth
 }
 
@@ -669,11 +670,11 @@ func (k *Kernel) register(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("kernel: metrics scope of module %s: %w", id, err))
 			continue
 		}
-		e.tasksDep, e.healthDep = &moduleTasks{}, &moduleHealth{}
+		e.tasksDep, e.healthDep, e.rowsDep = &moduleTasks{}, &moduleHealth{}, &moduleTaskRows{}
 		deps := module.Deps{Module: id, Log: k.moduleLog(id), Metrics: scope, ExtendStart: k.extendStart(id),
 			RequestRestart: k.lifecycle.RequestRestart, Storage: k.storageHandles(id), Secrets: k.secretsScope(id),
 			State: k.moduleState(ctx), SecretsKeyringExported: k.keyringExported(),
-			Config: k.configAccess(e.man), Tasks: e.tasksDep, Health: e.healthDep}
+			Config: k.configAccess(e.man), Tasks: e.tasksDep, Health: e.healthDep, TaskRows: e.rowsDep}
 		k.applyIdentityDeps(&deps, e.man)
 		r := module.NewRegistrar(module.RegistrarConfig{
 			Context:  regCtx,
