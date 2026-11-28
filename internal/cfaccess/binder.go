@@ -48,9 +48,9 @@ func MarkCFAccessVerified(c *gin.Context) { c.Set(cfAccessVerifiedKey, true) }
 // Cloudflare Access is configured; otherwise the middleware is a pass-through.
 type CFAccessAuthenticator struct {
 	// verifier is the CFAssertionVerifier the ABS surface also takes, so a
-	// test can drive the middleware without Cloudflare's keys. nil (never a
-	// typed nil: NewCFAccessAuthenticator maps a nil pointer to nil) makes
-	// the middleware a pass-through.
+	// test can drive the middleware without Cloudflare's keys. nil makes the
+	// middleware a pass-through; its one caller passes a verifier only when one
+	// was built (internal/server wire_oauth.go), never a typed nil.
 	verifier CFAssertionVerifier
 	cfg      *legacyoauth.Config
 	store    legacyoauth.UserStore
@@ -88,19 +88,10 @@ func (h Hooks) complete() bool {
 	return h.KeyPresented != nil && h.BindUser != nil && h.Permissions != nil
 }
 
-// NewCFAccessAuthenticator wires the verifier, config, and store. Any nil → the
-// middleware becomes a no-op pass-through.
-func NewCFAccessAuthenticator(verifier *CFAccessVerifier, cfg *legacyoauth.Config, store legacyoauth.UserStore, hooks Hooks) *CFAccessAuthenticator {
-	a := &CFAccessAuthenticator{cfg: cfg, store: store, hooks: hooks}
-	if verifier != nil {
-		a.verifier = verifier
-	}
-	return a
-}
-
-// NewCFAccessAuthenticatorWithVerifier is NewCFAccessAuthenticator for any
-// CFAssertionVerifier (a test's fake). A nil verifier makes the middleware a
-// pass-through.
+// NewCFAccessAuthenticatorWithVerifier wires HEAD's binder over any
+// CFAssertionVerifier (the real one, or a test's fake), with the config, the
+// store and the hooks. A nil verifier makes the middleware a pass-through; pass
+// an untyped nil, not a nil *CFAccessVerifier, which is a non-nil interface.
 func NewCFAccessAuthenticatorWithVerifier(verifier CFAssertionVerifier, cfg *legacyoauth.Config, store legacyoauth.UserStore, hooks Hooks) *CFAccessAuthenticator {
 	return &CFAccessAuthenticator{verifier: verifier, cfg: cfg, store: store, hooks: hooks}
 }
