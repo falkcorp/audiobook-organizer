@@ -801,6 +801,9 @@ func ValidateOpDef(def OperationDef) error {
 	if err := validatePreview(def); err != nil {
 		return err
 	}
+	if err := validateStartPrecondition(def); err != nil {
+		return err
+	}
 	return validateFormerIDs(def)
 }
 

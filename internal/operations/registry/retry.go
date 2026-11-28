@@ -66,9 +66,17 @@ func IsInterruptedStatus(status string) bool {
 //     its runs each carry their own item set, so another run is different
 //     work (the same exemption supersedeStaleQuiesced makes).
 //
+// A retry is a start by a request, so the def's StartPrecondition
+// (OperationDef.StartPrecondition) is asked here as it is in EnqueueOp, with the
+// options of the RETRYING request (opts: who is retrying, not the account the row
+// was first queued by, which a retry does not change). Without it a def that
+// refuses a start with no account could be re-queued, from a row it once admitted,
+// by a caller that has none: the export def is ResumeDrop, so every export a
+// restart interrupted is an interrupted_dropped row this path re-queues. A refusal
+// is a *StartRefusedError, returned before any write, with the row untouched.
+//
 // actor labels the op log line that marks the retry boundary.
-func (r *Registry) RetryInterrupted(ctx context.Context, opID, actor string) error {
-	_ = ctx
+func (r *Registry) RetryInterrupted(ctx context.Context, opID, actor string, opts ...EnqueueOption) error {
 	r.retryMu.Lock()
 	defer r.retryMu.Unlock()
 
@@ -106,6 +114,15 @@ func (r *Registry) RetryInterrupted(ctx context.Context, opID, actor string) err
 	r.noteAliasUse(row.DefID, aliasEntryRetry)
 	if live {
 		return fmt.Errorf("%w: op %s still has a live run handle", ErrOpActive, opID)
+	}
+	if def.StartPrecondition != nil {
+		req := EnqueueOptions{}
+		for _, opt := range opts {
+			opt(&req)
+		}
+		if err := def.StartPrecondition(ctx, req); err != nil {
+			return err
+		}
 	}
 	// Hold the def's admission lock from the same-def check through the
 	// re-queue, so EnqueueOp's dedupe cannot read the active set in between

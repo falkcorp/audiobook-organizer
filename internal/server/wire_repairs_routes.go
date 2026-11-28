@@ -338,7 +338,7 @@ var (
 // An op with no actor is errNoExportActor (every start of the export refuses
 // such a request before it queues, through the definition's start precondition,
 // diagnosticsStartPrecondition, so what reaches here is a row queued before that
-// refusal existed or one written by a path that does not go through EnqueueOp);
+// refusal existed);
 // an actor core does not hold, holds
 // as not active, or refuses a principal for is errExportActorNotStanding; a
 // read failure is returned as it is. The map is empty whenever err is set.
