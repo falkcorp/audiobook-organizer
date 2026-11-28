@@ -1,7 +1,7 @@
 <!-- file: docs/configuration.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.8.0 -->
 <!-- guid: 0ec741a2-f3cf-4a0e-a59f-07cd513eb86b -->
-<!-- last-edited: 2026-10-23 -->
+<!-- last-edited: 2026-11-28 -->
 
 # Configuration Reference
 
@@ -108,7 +108,7 @@ start and one trailing newline is trimmed. Use it for secrets from systemd
 
 Two names from other software are also read, as a second canonical name for
 their key: `OPENAI_API_KEY` and `OPENAI_BASE_URL` (for
-`integrations.ai.openai.api_key` and `.base_url`), plus the OpenTelemetry
+`integrations.ai.openai.api_key` and `.url`), plus the OpenTelemetry
 exporter variables (`OTEL_EXPORTER_OTLP_ENDPOINT` and the related names). If both
 spellings are set to different values, the `ABO_` name wins with a warning, and
 the start is refused if the key is protected at admin level or higher.
@@ -202,7 +202,37 @@ Releases before the config flip read unprefixed names (`ROOT_DIR`,
 Before deploying, run `audiobook-organizer config check`. It opens no store,
 reads only the environment and the operator file, and prints each retired name
 with its replacement. It exits non-zero when a name would stop the server, or a
-value does not decode. Pass the flags the service starts with as
+value does not decode. It runs the same two checks the start runs: core's list
+of retired names, and the two operator settings below, so it is not green on a
+host the start refuses.
+
+Two operator settings are refused at start (and by `config check`) in every
+spelling, by key name, never printing the value, and not only as an exact
+environment name:
+
+- `integrations.ai.openai.base_url`, renamed `integrations.ai.openai.url`
+  (`ABO_INTEGRATIONS_AI_OPENAI_URL`; `OPENAI_BASE_URL` binds to it too).
+  Before the flip this name was a working setting; it is now a refusal that
+  names the new one.
+- `integrations.metadata.<source id>.credentials.<k>`: a metadata source's
+  credential is a stored secret now (Settings, Metadata tab, or
+  `PUT /api/v1/config`), no longer read from the environment or the operator
+  file.
+
+Each is refused as the canonical environment variable (`ABO_INTEGRATIONS_...`),
+as its `<NAME>_FILE` form (any variable can be given as a file, see above) and
+as a key of the operator file. The literal `null` is unset for a variable and
+is not tested for a `<NAME>_FILE`, whose value is a file path. In
+`deploy/retired-env-names.txt` the metadata family is one row with a `*`
+(`ABO_INTEGRATIONS_METADATA_*_CREDENTIALS_*`): a `*` stands for one or more
+characters, and a row's `<NAME>_FILE` form counts as the row for every row.
+
+**What the deploy preflight does not see.** `make deploy-env-check` reads only
+`deploy/local.conf` and the `Environment=` lines of the unit template. It does
+not follow `EnvironmentFile=`, and it reads no host, so a variable set in the
+live environment, in a file the unit loads, or a key of the operator file is
+caught only at start and by `config check`, run on the host with the service's
+environment and flags. Pass the flags the service starts with as
 `--set <path>=<value>` (for example `--set core.storage.path=/srv/data/audiobooks.pebble`).
 
 The full list, with the refuse or warn verdict for each name, is
