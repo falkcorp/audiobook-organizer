@@ -1157,6 +1157,10 @@ const (
 func noFingerprintBackend(t testing.TB) {
 	t.Helper()
 	t.Setenv("PATH", t.TempDir())
+	// The resolved path is a package global the boot itself also sets (server.go,
+	// from the tool registry): put back what this test found, not "".
+	prev := fingerprint.ResolvedFpcalcPath()
+	t.Cleanup(func() { fingerprint.SetResolvedFpcalcPath(prev) })
 	fingerprint.SetResolvedFpcalcPath("")
 	if fingerprint.Available() {
 		t.Fatal("a fingerprint backend is still found with an empty PATH")

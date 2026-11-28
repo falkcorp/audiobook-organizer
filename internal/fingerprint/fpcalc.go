@@ -54,6 +54,10 @@ func SetResolvedFpcalcPath(path string) {
 	resolvedFpcalcPath = path
 }
 
+// ResolvedFpcalcPath is the path SetResolvedFpcalcPath last set ("" = PATH lookup).
+// A test that changes it reads this first so its cleanup puts back what it found.
+func ResolvedFpcalcPath() string { return resolvedFpcalcPath }
+
 // lookupFpcalc returns the path to fpcalc, preferring the ToolRegistry-injected
 // path when set, then falling back to exec.LookPath. Returns ("", error) when
 // fpcalc is not found by either means.
