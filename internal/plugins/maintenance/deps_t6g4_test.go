@@ -100,7 +100,7 @@ func TestBooksT6G4Writer_CoversEveryMethodOfTheInterface(t *testing.T) {
 func TestBooksT6G4Deps_NilStatsStaysNilSoRegistrationStillRefuses(t *testing.T) {
 	s, _ := g2Fixture(t)
 
-	d := newT6G4Deps(nil, g4HostSpy{}, nil)
+	d := newT6G4Deps(nil, g4HostSpy{}, "")
 	require.Nil(t, d.Stats)
 	require.Nil(t, d.Store)
 	require.Nil(t, d.NewWriter)
@@ -108,12 +108,12 @@ func TestBooksT6G4Deps_NilStatsStaysNilSoRegistrationStillRefuses(t *testing.T) 
 	require.ErrorContains(t, err, "Stats")
 	require.Nil(t, defs)
 
-	d = newT6G4Deps(s, nil, nil)
+	d = newT6G4Deps(s, nil, "")
 	require.NotNil(t, d.Stats)
 	require.Nil(t, d.Store, "no host: the reads that need it have nowhere to go")
 	require.Nil(t, d.NewWriter)
 
-	d = newT6G4Deps(s, g4HostSpy{}, nil)
+	d = newT6G4Deps(s, g4HostSpy{}, "")
 	defs, err = t6g4Kinds(d, nil)
 	require.NoError(t, err)
 	require.Len(t, defs, t6g4DefCount())
@@ -124,7 +124,7 @@ func TestBooksT6G4Deps_NilStatsStaysNilSoRegistrationStillRefuses(t *testing.T) 
 // Effects-enforcing writer built from the kind's own definition, Live and Preview.
 func TestBooksT6G4Writer_EveryKindsCallsAreAdmittedByItsOwnEffects(t *testing.T) {
 	s, id := g2Fixture(t)
-	deps := newT6G4Deps(s, g4HostSpy{root: t.TempDir()}, nil)
+	deps := newT6G4Deps(s, g4HostSpy{root: t.TempDir()}, "")
 	calls := g4WriterCalls(id)
 	for _, want := range t6g4Expected {
 		if len(want.calls) == 0 {
@@ -152,7 +152,7 @@ func TestBooksT6G4Writer_EveryKindsCallsAreAdmittedByItsOwnEffects(t *testing.T)
 
 func TestBooksT6G4Writer_NoWriterRefusesEveryWrite(t *testing.T) {
 	s, id := g2Fixture(t)
-	w := newT6G4Deps(s, g4HostSpy{}, nil).NewWriter(nil)
+	w := newT6G4Deps(s, g4HostSpy{}, "").NewWriter(nil)
 	require.ErrorIs(t, w.RecomputeBookAggregates(id), tasks.ErrOutsideEffects)
 	_, err := w.DedupTriageApply(context.Background())
 	require.ErrorIs(t, err, tasks.ErrOutsideEffects)

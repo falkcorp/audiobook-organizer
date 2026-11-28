@@ -21,7 +21,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -444,15 +443,8 @@ type t6g4Probe struct {
 	handed         tasks.Writer
 }
 
-// fakeT6G4Scan is a ScanController that grants every stand-down at once.
-type fakeT6G4Scan struct{ acquires atomic.Int32 }
-
-func (f *fakeT6G4Scan) AcquireScanStandDown(context.Context, string, string) (func(), error) {
-	f.acquires.Add(1)
-	return func() {}, nil
-}
-func (*fakeT6G4Scan) RenewScanStandDown(string) bool { return true }
-func (*fakeT6G4Scan) ScanStandDownValid(string) bool { return true }
+// t6g4ScanKey is the library scan key the test owner declares.
+const t6g4ScanKey tasks.Key = "books.library.scan"
 
 // fakeT6G4Deps is the helper the brief names: deps with a recording store and a
 // NewWriter that records the tasks.Writer it was handed.
@@ -464,8 +456,8 @@ func fakeT6G4Deps(t *testing.T) (t6g4Deps, *t6g4Probe) {
 		writer: &fakeT6G4Writer{rec: rec},
 	}
 	return t6g4Deps{
-		Store: pr.store,
-		Scan:  &fakeT6G4Scan{},
+		Store:        pr.store,
+		StandDownKey: t6g4ScanKey,
 		NewWriter: func(w tasks.Writer) t6g4Writer {
 			pr.mu.Lock()
 			defer pr.mu.Unlock()
@@ -502,6 +494,55 @@ type t6g4Host struct {
 	logs     []string
 	notes    []string // Progress.Note: the run's status line, in order
 	touches  int      // Progress.Tick: liveness stamps
+
+	// stood, renews and releases record the stand-down holds the run took. A hold
+	// is healthy until renewErr is set: every Renew after that returns it, as the
+	// executor's returns tasks.ErrHoldLost for a lapsed lease and the marker
+	// store's error for a marker that did not land.
+	stood    []tasks.Key
+	renews   int
+	releases int
+	renewErr error
+}
+
+// t6g4Hold is the stand-down hold t6g4Host hands out: it counts its Renew and
+// Release calls, and its Renew fails with t6g4Host.renewErr once a test sets it.
+type t6g4Hold struct{ h *t6g4Host }
+
+func (k t6g4Hold) Release() {
+	k.h.mu.Lock()
+	k.h.releases++
+	k.h.mu.Unlock()
+}
+
+func (k t6g4Hold) Renew() error {
+	k.h.mu.Lock()
+	defer k.h.mu.Unlock()
+	k.h.renews++
+	return k.h.renewErr
+}
+
+// failRenewals makes every later Renew of the holds this host hands out return err.
+func (h *t6g4Host) failRenewals(err error) {
+	h.mu.Lock()
+	h.renewErr = err
+	h.mu.Unlock()
+}
+
+// StandDown records the key the run parked.
+func (h *t6g4Host) StandDown(key tasks.Key) (tasks.Hold, error) {
+	h.mu.Lock()
+	h.stood = append(h.stood, key)
+	h.mu.Unlock()
+	return t6g4Hold{h: h}, nil
+}
+
+// standDownTally is the stand-down keys taken, and how many Renew and Release
+// calls the holds saw.
+func (h *t6g4Host) standDownTally() (keys []tasks.Key, renews, releases int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.stood), h.renews, h.releases
 }
 
 // Note records the run's status line (FakeRun's is a no-op).
@@ -979,6 +1020,17 @@ func t6g4WantNotWhile(head sdk.OperationDef) []tasks.Kind {
 	return out
 }
 
+// t6g4NativeScanGuard is the scan guard a native kind adds beyond HEAD's
+// DependsOn (F5-18e), from the guard table; none for a kind that has no guard.
+func t6g4NativeScanGuard(kind tasks.Kind) []tasks.Kind {
+	for _, c := range nativeScanGuardCases() {
+		if c.kind == kind {
+			return c.want
+		}
+	}
+	return nil
+}
+
 // t6g4NamesModeKey reports whether a Help text tells the operator to pass a mode
 // param the native shell refuses.
 func t6g4NamesModeKey(help string) bool {
@@ -1053,8 +1105,17 @@ func TestT6G4Kinds_MatchHEADDefs(t *testing.T) {
 			if c.Priority != wantPrio {
 				t.Errorf("Priority = %v, want %v", c.Priority, wantPrio)
 			}
-			if want := t6g4WantNotWhile(head); !slices.Equal(c.NotWhile, want) || (len(want) > 0) != w.hasDependsOn {
-				t.Errorf("NotWhile = %v, want %v derived from HEAD's DependsOn %v", c.NotWhile, want, head.DependsOn)
+			// HEAD's DependsOn maps by rule R5; a native kind may also carry the scan
+			// guard HEAD enforces by reading the v2 queue instead (F5-18e,
+			// native_scan_guard_test.go's table, which spells the kinds through the
+			// rename map and not through the helpers the definitions call).
+			fromHead := t6g4WantNotWhile(head)
+			if (len(fromHead) > 0) != w.hasDependsOn {
+				t.Errorf("HEAD's DependsOn %v, table hasDependsOn = %v", head.DependsOn, w.hasDependsOn)
+			}
+			wantNotWhile := slices.Concat(fromHead, t6g4NativeScanGuard(w.kind))
+			if !slices.Equal(sortedKinds(c.NotWhile), sortedKinds(wantNotWhile)) {
+				t.Errorf("NotWhile = %v, want %v: HEAD's DependsOn %v mapped by R5, plus the native scan guard", c.NotWhile, wantNotWhile, head.DependsOn)
 			}
 			if !slices.Equal(c.Ready, []tasks.ReadySignal{t6g4SignalMemDB}) {
 				t.Errorf("Ready = %v, want [%s]", c.Ready, t6g4SignalMemDB)
@@ -1350,31 +1411,31 @@ func t6g4CheckRecordedWritesDeclared(t *testing.T, def tasks.Definition, pr *t6g
 }
 
 // TestT6G4FSRegroup_LiveApplyNeedsScanStandDown (review M11): a live fs-regroup
-// apply with no scan stand-down service refuses by name and writes nothing; a
-// preview needs none and runs; with the service present the live run is not
+// apply with no scan stand-down key refuses by name and writes nothing; a
+// preview needs none and runs; with the key present the live run is not
 // refused for its absence.
 func TestT6G4FSRegroup_LiveApplyNeedsScanStandDown(t *testing.T) {
 	run := func(t *testing.T, mode tasks.Mode, withScan bool) (*t6g4Probe, error) {
 		deps, pr := fakeT6G4Deps(t)
 		if !withScan {
-			deps.Scan = nil
+			deps.StandDownKey = ""
 		}
 		def := t6g4KindByName(t, t6g4KindsUnchecked(deps, nil), fsRegroupKind)
 		_, rc := newT6G4RC(fsRegroupKind, mode, &t6g4RunWriter{})
 		return pr, t6g4RunSafely(t, def, rc, "")
 	}
 	pr, err := run(t, tasks.ModeLive, false)
-	if err == nil || !strings.Contains(err.Error(), "Scan is not set") {
-		t.Errorf("live apply with no Scan: err = %v, want a refusal naming t6g4Deps.Scan", err)
+	if err == nil || !strings.Contains(err.Error(), "StandDownKey is not set") {
+		t.Errorf("live apply with no Scan: err = %v, want a refusal naming t6g4Deps.StandDownKey", err)
 	}
 	if got := t6g4RecordedResources(t, pr.store.rec.all()); len(got) != 0 {
 		t.Errorf("the refused live apply wrote %v", got)
 	}
-	if _, err := run(t, tasks.ModePreview, false); err != nil && strings.Contains(err.Error(), "Scan is not set") {
+	if _, err := run(t, tasks.ModePreview, false); err != nil && strings.Contains(err.Error(), "StandDownKey is not set") {
 		t.Errorf("a preview must not need the scan stand-down, got %v", err)
 	}
-	if _, err := run(t, tasks.ModeLive, true); err != nil && strings.Contains(err.Error(), "Scan is not set") {
-		t.Errorf("a live apply with Scan set was refused for its absence: %v", err)
+	if _, err := run(t, tasks.ModeLive, true); err != nil && strings.Contains(err.Error(), "StandDownKey is not set") {
+		t.Errorf("a live apply with StandDownKey set was refused for its absence: %v", err)
 	}
 }
 

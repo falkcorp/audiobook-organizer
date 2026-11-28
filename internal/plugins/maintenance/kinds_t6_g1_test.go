@@ -122,6 +122,9 @@ type t6g1TestHold struct{}
 
 func (t6g1TestHold) Release() {}
 
+// Renew succeeds: this hold is never lost.
+func (t6g1TestHold) Renew() error { return nil }
+
 // StandDown records the key the run parked.
 func (h *t6g1Host) StandDown(key tasks.Key) (tasks.Hold, error) {
 	h.mu.Lock()

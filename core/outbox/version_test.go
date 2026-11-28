@@ -166,6 +166,12 @@ func TestOutbox_UnknownVersionMessageRowStopsPair(t *testing.T) {
 	r1.stage(ka, Dispatch{Villain: "Riddler", Block: 3})
 	r1.stage(kb, Dispatch{Villain: "Bane", Block: 4})
 	eventually(t, "four sequenced messages", func() bool { return r1.messages(noticeName) == 4 })
+	// End boot 1's relay run before closing. Shutdown would leave it
+	// interrupted, and the relay resumes from zero, so boot 2's executor would
+	// re-queue it on its own (noRelay only stops the rig starting one) and it
+	// could deliver all four messages before the bad row below is planted. On
+	// a loaded runner that happened, and the wait for exactly two timed out.
+	r1.stopRelay()
 	r1.close()
 
 	rn := &recorder{}

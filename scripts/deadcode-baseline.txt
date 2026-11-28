@@ -2028,6 +2028,7 @@ internal/plugins/maintenance.creditCensusParallelism
 internal/plugins/maintenance.creditsBackfillParallelism
 internal/plugins/maintenance.duplicateCopiesFixer.detail
 internal/plugins/maintenance.durationPoolOn
+internal/plugins/maintenance.fileIntroNativeNotWhile
 internal/plugins/maintenance.folderBooksFixer.handOff
 internal/plugins/maintenance.forwardedBookmarkReads.ListBookmarks
 internal/plugins/maintenance.forwardedBookmarkReads.ListBookmarksForUser
@@ -2063,6 +2064,11 @@ internal/plugins/maintenance.nativeCBFingerprint
 internal/plugins/maintenance.nativeCBLedger.judgedSources
 internal/plugins/maintenance.nativeCBLedger.markJudged
 internal/plugins/maintenance.nativeCBLedger.others
+internal/plugins/maintenance.nativeScanNotWhile
+internal/plugins/maintenance.nativeScanStandDown.AcquireScanStandDown
+internal/plugins/maintenance.nativeScanStandDown.RenewScanStandDown
+internal/plugins/maintenance.nativeScanStandDown.ScanStandDownLoss
+internal/plugins/maintenance.nativeScanStandDown.ScanStandDownValid
 internal/plugins/maintenance.need.check
 internal/plugins/maintenance.need.err
 internal/plugins/maintenance.newBatchHost
@@ -2184,6 +2190,7 @@ internal/plugins/maintenance.t6g3NativeCBHold.Items
 internal/plugins/maintenance.t6g3NativeCBHold.Lost
 internal/plugins/maintenance.t6g3NativeCBHold.Release
 internal/plugins/maintenance.t6g3NativeItems
+internal/plugins/maintenance.t6g3NativeStandDown
 internal/plugins/maintenance.t6g3NeedStore
 internal/plugins/maintenance.t6g3Priority
 internal/plugins/maintenance.t6g3RefuseModeKeys

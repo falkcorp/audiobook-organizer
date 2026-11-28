@@ -625,7 +625,8 @@ func TestT6G3_FolderCoverBackfillNativeLiveWritesThroughTheWriter(t *testing.T) 
 				spy    *t6g3ForwardSpy
 			)
 			kd := t6g3Deps{
-				Store: &t6g3CoverGateStore{t6g3Store: headT6g3Store{OpsStore: st, p: p}, b: barrier},
+				Store:        &t6g3CoverGateStore{t6g3Store: headT6g3Store{OpsStore: st, p: p}, b: barrier},
+				StandDownKey: t6g3ScanKey,
 				NewWriter: func(w tasks.Writer) t6g3Writer {
 					mu.Lock()
 					defer mu.Unlock()
@@ -656,6 +657,97 @@ func TestT6G3_FolderCoverBackfillNativeLiveWritesThroughTheWriter(t *testing.T) 
 			assert.Equal(t, tc.want, barrier.maxInFlight(), "the pool is the workers param, else the default")
 		})
 	}
+}
+
+// orderedStandDownHost is a t6g3Host whose stand-down reports, to the test, how
+// many writes had happened when the hold was taken and when it was released.
+type orderedStandDownHost struct {
+	*t6g3Host
+	onTake    func()
+	onRelease func()
+}
+
+func (h *orderedStandDownHost) StandDown(k tasks.Key) (tasks.Hold, error) {
+	h.onTake()
+	if _, err := h.t6g3Host.StandDown(k); err != nil {
+		return nil, err
+	}
+	return orderedStandDownHold{release: h.onRelease}, nil
+}
+
+type orderedStandDownHold struct{ release func() }
+
+func (h orderedStandDownHold) Release()   { h.release() }
+func (orderedStandDownHold) Renew() error { return nil }
+
+// folderCoverStandDownRun runs a native folder-cover run in mode with the scan
+// key standDownKey declared, over the two-book fixture, and returns the host, the
+// writer spy and the error. onTake and onRelease see the spy's ModifyBook count at
+// the moment the hold is taken and released.
+func folderCoverStandDownRun(t *testing.T, mode tasks.Mode, standDownKey tasks.Key, onTake, onRelease func(modifies int)) (*t6g3Host, *t6g3ForwardSpy, error) {
+	t.Helper()
+	st, deps, _ := coverOpFixture(t)
+	p := New(deps)
+	var spy *t6g3ForwardSpy
+	kd := t6g3Deps{
+		Store:        &t6g3CoverGateStore{t6g3Store: headT6g3Store{OpsStore: st, p: p}, b: newT6G3Barrier(1)},
+		StandDownKey: standDownKey,
+		NewWriter: func(tasks.Writer) t6g3Writer {
+			spy = newT6G3ForwardSpy(headT6g3Writer{p: p, store: st})
+			return spy
+		},
+	}
+	d := t6g3KindByName(t, (&Plugin{}).t6g3Kinds(kd, nil), "maintenance.folder-cover-backfill")
+	base, _ := newT6G3Host(d.Kind(), mode, &t6g3Gate{id: "folder-cover"})
+	host := &orderedStandDownHost{
+		t6g3Host:  base,
+		onTake:    func() { onTake(len(spy.argsOf("ModifyBook"))) },
+		onRelease: func() { onRelease(len(spy.argsOf("ModifyBook"))) },
+	}
+	_, err := t6g3Run(t, d, tasks.NewRC(host), "")
+	return base, spy, err
+}
+
+// A live native folder-cover run takes the scan stand-down hold before its first
+// write and keeps it until the last, and a preview takes none. HEAD's shell
+// refused while a scan was running through a v2-queue read that does not survive
+// the flip; the hold is what stops a scan that starts after this run does.
+func TestT6G3_FolderCoverLiveApplyHoldsTheScanStandDownAcrossItsWrites(t *testing.T) {
+	var atTake, atRelease []int
+	host, spy, err := folderCoverStandDownRun(t, tasks.ModeLive, t6g3ScanKey,
+		func(n int) { atTake = append(atTake, n) }, func(n int) { atRelease = append(atRelease, n) })
+	require.NoError(t, err)
+	host.mu.Lock()
+	keys := slices.Clone(host.standDowns)
+	host.mu.Unlock()
+	assert.Equal(t, []tasks.Key{t6g3ScanKey}, keys, "the run parks the library scan once, on the owner's key")
+	assert.Equal(t, []int{0}, atTake, "the hold is taken before the first write")
+	total := len(spy.argsOf("ModifyBook"))
+	require.NotZero(t, total, "the fixture's covers were written")
+	assert.Equal(t, []int{total}, atRelease, "the hold is released after the last write")
+
+	atTake, atRelease = nil, nil
+	host, _, err = folderCoverStandDownRun(t, tasks.ModePreview, t6g3ScanKey,
+		func(n int) { atTake = append(atTake, n) }, func(n int) { atRelease = append(atRelease, n) })
+	require.NoError(t, err)
+	assert.Empty(t, atTake, "a preview writes nothing and takes no hold")
+	assert.Empty(t, host.standDowns)
+}
+
+// With no scan key declared a live run refuses before any write, as
+// credits-backfill does, rather than running with nothing to stop a scan; a
+// preview does not need one.
+func TestT6G3_FolderCoverLiveApplyRefusesWithoutAScanKey(t *testing.T) {
+	var took bool
+	host, spy, err := folderCoverStandDownRun(t, tasks.ModeLive, "", func(int) { took = true }, func(int) {})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "StandDownKey is not set")
+	assert.False(t, took)
+	assert.Empty(t, host.standDowns)
+	assert.Empty(t, spy.argsOf("ModifyBook"), "the refused run wrote nothing")
+
+	_, _, err = folderCoverStandDownRun(t, tasks.ModePreview, "", func(int) {}, func(int) {})
+	require.NoError(t, err)
 }
 
 // --- the shells that refuse a missing store ---

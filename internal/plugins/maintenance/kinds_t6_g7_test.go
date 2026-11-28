@@ -552,6 +552,9 @@ type t6g7TestHold struct{ released *bool }
 
 func (h t6g7TestHold) Release() { *h.released = true }
 
+// Renew succeeds: this hold is never lost.
+func (h t6g7TestHold) Renew() error { return nil }
+
 // t6g7Host is a taskstest.FakeRun with the mode and writer a test chooses
 // (FakeRun is pinned to ModeLive with no writer, and refuses a stand-down).
 type t6g7Host struct {

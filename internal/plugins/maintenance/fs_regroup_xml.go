@@ -334,8 +334,11 @@ func (p *Plugin) fsRegroupXMLKind(deps t6g4Deps, sched *tasks.Schedule) tasks.De
 		Priority:       tasks.PriorityLow,
 		ConcurrencyKey: tasks.Key("books.maintenance.fs-regroup-xml"),
 		Timeout:        120 * time.Minute,
-		Schedule:       sched,
-		Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
+		// HEAD refuses an apply while a library scan is queued or running
+		// (refuseWhileLibraryScanActive); natively a scan that is running holds the run.
+		NotWhile: nativeScanNotWhile(),
+		Schedule: sched,
+		Ready:    []tasks.ReadySignal{t6g4SignalMemDB},
 		Run: func(rc *tasks.RC, in fsRegroupNativeParams) (fsRegroupResult, error) {
 			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
 				return fsRegroupResult{}, err
@@ -344,15 +347,16 @@ func (p *Plugin) fsRegroupXMLKind(deps t6g4Deps, sched *tasks.Schedule) tasks.De
 			if err != nil {
 				return fsRegroupResult{}, err
 			}
-			// A live apply parks the library scan around its writes: with no scan
-			// stand-down service the native run refuses rather than writing
-			// beside a scan (HEAD's degraded caller, which has no scanner,
-			// stays on HEAD's shell). A preview writes nothing and needs none.
-			if base.Live && deps.Scan == nil {
-				return fsRegroupResult{}, fmt.Errorf("%s: t6g4Deps.Scan is not set; a live apply needs the scan stand-down", rc.Kind())
+			// A live apply parks the library scan around its writes (rc.StandDown over
+			// the owner's scan key, the stand-down the executor renews and fences on):
+			// with no key the native run refuses rather than writing beside a scan
+			// (HEAD's degraded caller, which has no scanner, stays on HEAD's shell).
+			// A preview writes nothing and needs none.
+			if base.Live && deps.StandDownKey == "" {
+				return fsRegroupResult{}, fmt.Errorf("%s: t6g4Deps.StandDownKey is not set; a live apply needs the scan stand-down", rc.Kind())
 			}
 			return p.runFSRegroupXMLCore(rc.Context(), fsRegroupParams{Limit: in.Limit, Categories: in.Categories},
-				fsRegroupEnv{t6g4Base: base, Scan: deps.Scan})
+				fsRegroupEnv{t6g4Base: base, Scan: &nativeScanStandDown{rc: rc, key: deps.StandDownKey}})
 		},
 	})
 }
@@ -1168,7 +1172,7 @@ func t6g4ApplyFSRepairPlan(ctx context.Context, store fsRepairStore, scan ScanCo
 	case err != nil:
 		return res, fmt.Errorf("fs-regroup-xml apply: %w", err)
 	case res.StandDownLost:
-		return res, fmt.Errorf("fs-regroup-xml: scan stand-down lease lapsed after %d groups — aborted (re-run when the scan is idle)", res.Groups)
+		return res, fmt.Errorf("fs-regroup-xml: %s after %d groups — aborted (re-run when the scan is idle)", scanStandDownLossText(scan), res.Groups)
 	case res.Errors > 0:
 		return res, fmt.Errorf("%d errors during fs-regroup apply (see op log)", res.Errors)
 	}

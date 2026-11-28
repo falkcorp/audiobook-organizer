@@ -65,9 +65,6 @@ var (
 	// AfterApply) to run over it (HEAD: Registry.CanFinishWithoutResuming,
 	// registry/finish.go; 409 tasks.not_finishable).
 	ErrNotFinishable = errors.New("executor: the run's kind cannot be finished without resuming")
-	// ErrHoldLost: a stand-down hold's lease expired without renewal; the
-	// holder's next write is refused (5T.3.7).
-	ErrHoldLost = errors.New("executor: stand-down hold lost: its lease expired")
 	// ErrLaneNotDeclared: Lane names a lane the definition does not declare
 	// in Common.Lanes, or one no Options.Lanes entry registers.
 	ErrLaneNotDeclared = errors.New("executor: lane not declared")

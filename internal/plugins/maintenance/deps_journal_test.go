@@ -20,7 +20,7 @@ import (
 func TestBooksT6G4Writer_JournalWritesAfterTheOpenAreStamped(t *testing.T) {
 	s, _ := g2Fixture(t)
 	rec := &booksGateRecorder{}
-	w := newT6G4Deps(s, g4HostSpy{root: t.TempDir()}, nil).NewWriter(rec)
+	w := newT6G4Deps(s, g4HostSpy{root: t.TempDir()}, "").NewWriter(rec)
 
 	j, err := w.OpenWhisperJournal()
 	require.NoError(t, err)

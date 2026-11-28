@@ -183,8 +183,9 @@ func t7HeadStandDown(gate opsregistry.ScanStandDownGate, rep opsregistry.Reporte
 }
 
 // t7NativeStandDown is the native acquire: rc.StandDown over the scan's key. An
-// empty key refuses, so a live write never runs without the interlock. The
-// kernel fences the run's writer when the lease is lost and cancels its context.
+// empty key refuses, so a live write never runs without the interlock. When the
+// lease lapses the executor cancels the run's context with cause
+// tasks.ErrHoldLost and the run's writer refuses its next write.
 func t7NativeStandDown(rc *tasks.RC, key tasks.Key) t7StandDown {
 	return func(_ context.Context, reason string) (t7Hold, error) {
 		if key == "" {

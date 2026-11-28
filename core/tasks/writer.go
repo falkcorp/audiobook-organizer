@@ -124,6 +124,10 @@ type ChangeSink interface {
 var (
 	// ErrFenced: write refused, the run no longer holds its permit.
 	ErrFenced = errors.New("tasks: run is fenced (canceled, abandoned, timed out or lease lost); write refused")
+	// ErrHoldLost: a stand-down hold's lease lapsed without renewal, or the hold was
+	// released; Hold.Renew returns it and the run's next write is refused with
+	// ErrFenced (5T.3.7).
+	ErrHoldLost = errors.New("tasks: stand-down hold lost: its lease lapsed or it was released")
 	// ErrPreview: preview, the intent is recorded and the write not performed.
 	ErrPreview = errors.New("tasks: preview mode; write recorded, not performed")
 	// ErrChangedSincePlan: a Fixer row re-evaluated differently at apply.

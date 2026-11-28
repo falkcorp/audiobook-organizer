@@ -160,6 +160,9 @@ func (x t6g5HoldHandle) Release() {
 	x.h.mu.Unlock()
 }
 
+// Renew succeeds: this hold is never lost.
+func (x t6g5HoldHandle) Renew() error { return nil }
+
 func (h *t6g5Holds) take(key tasks.Key) (tasks.Hold, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

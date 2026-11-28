@@ -584,8 +584,11 @@ func (p *Plugin) itunesCloneIntoLibraryKind(deps t6g5Deps, sched func(tasks.Kind
 		// the identification driver's derived state; `indexes` owns that family
 		// (kinds_resources.go).
 		tasks.Res("books", string(ops.ResIndexes)))
+	c := t6g5Common(p.itunesCloneIntoLibraryDef(), itunesCloneIntoLibraryKind, eff, sched)
+	// The clone rewrites rows and files a scan rewrites; a running scan holds it.
+	c.NotWhile = nativeScanNotWhile()
 	return tasks.Task(itunesCloneIntoLibraryKind, tasks.TaskSpec[json.RawMessage, *icReport]{
-		Common: t6g5Common(p.itunesCloneIntoLibraryDef(), itunesCloneIntoLibraryKind, eff, sched),
+		Common: c,
 		Run: func(rc *tasks.RC, raw json.RawMessage) (*icReport, error) {
 			var params icParams
 			if err := t6g5DecodeParams(itunesCloneIntoLibraryKind, raw, &params, "dry_run", "dryRun"); err != nil {
