@@ -61,35 +61,67 @@ const (
 	FieldHasCover     = "has_cover"
 )
 
-// textFields are the fields an unfielded term is matched against: HEAD's _all
-// (every text-analysed field, the "keyword" ones included, because HEAD analyses
-// those with the standard analyzer too). The order is HEAD's textFieldBoosts
-// order first, then the rest.
-var textFields = []string{
-	FieldTitle, FieldAuthor, FieldSeries, FieldNarrator, FieldDescription,
-	FieldPublisher, FieldFilePath,
+// AnalyzerName is HEAD's free-text analyzer (internal/search bookIndexMapping's
+// book_en_nostop), declared in Spec.Analyzers and named by every free-text field.
+const AnalyzerName = "book_en_nostop"
+
+// Analyzers is the index's own analyzer set: HEAD's book_en_nostop, component
+// for component. '_' becomes a space before tokenizing (so "Arcane_Chef_2" is
+// three words), then Unicode words, possessive stripped, lowercased and Porter
+// stemmed, with no stop filter (a quoted phrase keeps its stop words in place).
+//
+// Unlike HEAD's bookIndexMapping there is no fallback to the stock English
+// analyzer: core refuses a component it cannot build at Open (ErrInvalidSpec)
+// rather than indexing with a default.
+func Analyzers() []index.Analyzer {
+	return []index.Analyzer{{
+		Name:         AnalyzerName,
+		CharFilters:  []index.CharFilter{index.CharUnderscoreToSpace},
+		Tokenizer:    index.TokenizeUnicodeWords,
+		TokenFilters: []index.TokenFilter{index.FilterEnglishPossessive, index.FilterLowercase, index.FilterPorterStem},
+	}}
+}
+
+// freeTextFields are HEAD's analysed free-text fields (bookIndexMapping's
+// textAnalyzed set); each names AnalyzerName.
+var freeTextFields = []string{
+	FieldTitle, FieldAuthor, FieldSeries, FieldNarrator, FieldPublisher,
+	FieldDescription, FieldFilePath,
+}
+
+// keywordFields are HEAD's "keyword" fields (bookIndexMapping's keyword()).
+var keywordFields = []string{
 	FieldTags, FieldFormat, FieldGenre, FieldLanguage, FieldLibraryState,
 	FieldISBN10, FieldISBN13, FieldASIN,
 }
 
-// TextFields returns the fields an unfielded term fans out over.
-func TextFields() []string { return append([]string(nil), textFields...) }
-
 // Fields is the index's declared field set, mirroring HEAD's bookIndexMapping.
 //
-// HEAD's "keyword" fields (tags, format, genre, language, library_state, isbn,
-// asin) are analysed with the standard analyzer, not the keyword analyzer: a
-// term on one matches by word, not by whole value (see the comment on keyword()
-// in internal/search/bleve_index.go). They are declared Text here, so the same
-// queries answer the same way.
+// The free-text fields name AnalyzerName (see Analyzers).
 //
-// The free-text fields use "standard" because the contract has no module
-// analyzer: HEAD's book_en_nostop (stemming, underscore splitting, stop words
-// kept) is a seam, "switch at the fold".
+// No field declares a Field.Boost. Score weights live in the query: Translate
+// carries the weights of HEAD's tree (the free-text fan-out's and the user's
+// ^n) and emits index.Boost on every node HEAD weighted, so scores match HEAD
+// exactly. A declared Field.Boost would also weight a fielded title:x at 3,
+// which HEAD does not (seams.d/F7-09-T6-core.md ruling 2). Moving HEAD's
+// textFieldBoosts onto the fields is a later, deliberate ranking change.
+//
+// HEAD's "keyword" fields (tags, format, genre, language, library_state, isbn,
+// asin) are not keywords: HEAD analyses them with the standard analyzer (word
+// tokens, lowercased, English stop words dropped; see the comment on keyword()
+// in internal/search/bleve_index.go), so a term on one matches by word, not by
+// whole value. They are declared Kind: index.Keyword with
+// Analyzer: index.AnalyzerStandard, which core accepts, so the same queries
+// answer the same way. Switching them to index.AnalyzerKeywordLowercase changes
+// answers (genre:fantasy would stop matching "Epic Fantasy") and is its own
+// change with its own MappingVersion bump (ruling 1 of seams.d/F7-09-T6-core.md).
 func Fields() []index.Field {
 	var fs []index.Field
-	for _, n := range textFields {
-		fs = append(fs, index.Field{Name: n, Kind: index.Text, Analyzer: "standard"})
+	for _, n := range freeTextFields {
+		fs = append(fs, index.Field{Name: n, Kind: index.Text, Analyzer: AnalyzerName})
+	}
+	for _, n := range keywordFields {
+		fs = append(fs, index.Field{Name: n, Kind: index.Keyword, Analyzer: index.AnalyzerStandard})
 	}
 	for _, n := range []string{
 		FieldYear, FieldSeriesNumber, FieldDuration, FieldBitrate,

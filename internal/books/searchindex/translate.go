@@ -34,8 +34,8 @@ type Translation struct {
 	// when MatchAll is set.
 	Query index.Query
 	// MatchAll: the indexed part constrains nothing (an empty search, or one of
-	// only per-user or tag terms). The contract has no match-all operation, so
-	// the caller lists books from the store, or uses MatchAllQuery.
+	// only per-user or tag terms). The caller lists with MatchAllQuery, or from
+	// the store.
 	MatchAll bool
 	// PerUser are the per-user terms (read_status, progress_pct, last_played) the
 	// caller applies to each viewer's rows after the index answers.
@@ -45,14 +45,10 @@ type Translation struct {
 	Tags []string
 }
 
-// matchNoneTerm is a term no document holds: no book has a format of it.
-const matchNoneTerm = "\x00no-such-term"
-
-// MatchAllQuery is an index query every document matches: the contract's Not is
-// "match all minus the operand", so negating a term nothing holds is match-all.
-// The contract has no match-all operation of its own (a seam, switch at the
-// fold).
-func MatchAllQuery() index.Query { return index.Not(index.Term(FieldFormat, matchNoneTerm)) }
+// MatchAllQuery is the index query of a listing with no search term: every
+// document (index.All). It costs the engine a walk of every document, so it
+// counts in a query's node budget as a Not does.
+func MatchAllQuery() index.Query { return index.All() }
 
 // Translate parses text with HEAD's search grammar and compiles it to an index
 // query. now anchors relative dates (date_added:>-7d).
@@ -123,8 +119,23 @@ func convert(q query.Query) (res index.Query, matchAll bool, err error) {
 	case *query.BooleanQuery:
 		return convertBoolean(v)
 	}
+	if isBareStar(q) {
+		return nil, true, nil
+	}
 	q2, err := convertLeaf(q)
 	return q2, false, err
+}
+
+// isBareStar reports HEAD's translation of an unfielded `*`: a prefix query with
+// no prefix, which HEAD runs against its "_all" field and which every indexed
+// book answers. It is a match-all, not an Or over the fields' empty prefixes: the
+// per-field fan-out (see convertLeafUnweighted) would ask each field for the
+// terms it has and so leave out a book with none of them, where HEAD's "_all"
+// lists every book. A `title:*` is a fielded empty prefix and stays one: it
+// matches the books that have a title term, as in HEAD.
+func isBareStar(q query.Query) bool {
+	p, ok := q.(*query.PrefixQuery)
+	return ok && p.Prefix == "" && p.Field() == ""
 }
 
 func convertAll(qs []query.Query) (kids []index.Query, anyAll bool, err error) {
@@ -212,30 +223,73 @@ func boostOf(q query.Query) float64 {
 	return 0
 }
 
-// convertLeaf maps one non-compound query. An unfielded term (HEAD's "_all")
-// fans out as an OR over the text fields, since the contract has no _all field.
+// weighted wraps leaf in index.Boost when HEAD weighted the node. HEAD's
+// weights are carried on the nodes, never declared on the fields (see Fields),
+// so an unweighted node stays at 1, as in HEAD. A boost of exactly 1 is the
+// default weight and is not emitted.
+//
+// Only leaves are weighted. HEAD also calls SetBoost on the conjunction
+// underscorePatternQuery builds for a multi-part pattern, but bleve never reads
+// the weight of a conjunction, disjunction or boolean query (their searchers
+// ignore BoostVal), so HEAD's scores carry no weight there. index.Boost on a
+// group would multiply every leaf under it and rank differently from HEAD;
+// convert therefore drops a group's weight, which is HEAD's effective answer.
+func weighted(q index.Query, boost float64) index.Query {
+	if boost == 0 {
+		return q
+	}
+	return index.Boost(q, boost)
+}
+
+// allFields are the fields HEAD's unfielded "_all" holds: every text-analysed
+// field, the "keyword" ones included (HEAD maps those with the standard analyzer
+// and bleve feeds _all from every text mapping).
+var allFields = append(append([]string(nil), freeTextFields...), keywordFields...)
+
+// convertLeaf maps one non-compound query, with HEAD's weight on it.
 func convertLeaf(q query.Query) (index.Query, error) {
 	boost := boostOf(q)
 	field := ""
 	if f, ok := q.(query.FieldableQuery); ok {
 		field = f.Field()
 	}
-	fields := []string{field}
-	if field == "" {
-		fields = textFields
+	leaf, err := convertLeafUnweighted(q, field)
+	if err != nil {
+		return nil, err
 	}
-	each := func(f func(field string) (index.Query, error)) (index.Query, error) {
-		kids := make([]index.Query, 0, len(fields))
-		for _, fl := range fields {
-			k, err := f(fl)
-			if err != nil {
-				return nil, err
-			}
-			kids = append(kids, k)
-		}
-		return or(kids), nil
+	if _, err := index.Describe(leaf); err != nil {
+		// A constructor recorded a problem: a wildcard with no literal
+		// character is the one a translated search can reach.
+		return nil, notExpressible("%v", err)
 	}
+	return weighted(leaf, boost), nil
+}
 
+// convertLeafUnweighted maps one non-compound query.
+//
+// An unfielded analysed match is HEAD's "_all" child of the free-text fan-out
+// and is index.MatchAnyField. The other unfielded leaves (a phrase, a prefix, a
+// fuzzy term, a pattern part) are an Or over allFields instead of the engine's _all: HEAD
+// analyses its _all with its default analyzer (book_en_nostop), while the
+// engine's composite is analysed with the standard analyzer, so the engine's _all
+// does not match "lucius fox" where the stemmed terms are "luciu fox" (HEAD does;
+// pinned by TestUnfieldedPatternsAnswerLikeHead). Each field's own analyzer is the
+// one HEAD's composite was built from.
+//
+// This fan-out goes away once core builds its _all mapping with the index's default
+// analyzer (a core-side follow-up, named in seams.d/F7-09-T6-core.md row 7): the
+// unfielded leaves can then be index.MatchAnyField again.
+func convertLeafUnweighted(q query.Query, field string) (index.Query, error) {
+	each := func(f func(field string) index.Query) index.Query {
+		if field != "" {
+			return f(field)
+		}
+		kids := make([]index.Query, 0, len(allFields))
+		for _, fl := range allFields {
+			kids = append(kids, f(fl))
+		}
+		return or(kids)
+	}
 	switch v := q.(type) {
 	case *query.MatchQuery:
 		if v.Fuzziness != 0 {
@@ -244,35 +298,32 @@ func convertLeaf(q query.Query) (index.Query, error) {
 		if v.Analyzer != "" {
 			return nil, notExpressible("a match with analyzer %q", v.Analyzer)
 		}
-		if boost == 0 {
-			return each(func(f string) (index.Query, error) { return index.Match(f, v.Match), nil })
+		if field == "" {
+			return index.MatchAnyField(v.Match), nil
 		}
-		return each(func(f string) (index.Query, error) { return termsString(f, v.Match, "", boost), nil })
+		return index.Match(field, v.Match), nil
 	case *query.MatchPhraseQuery:
-		return each(func(f string) (index.Query, error) {
-			return index.QueryString(fieldClause(f, `"`+escapePhrase(v.MatchPhrase)+`"`, boost)), nil
-		})
+		// The engine analyses a phrase with the field's own analyzer (stop
+		// words stay in place under book_en_nostop).
+		return each(func(f string) index.Query {
+			return index.QueryString(f + ":\"" + escapePhrase(v.MatchPhrase) + "\"")
+		}), nil
 	case *query.PrefixQuery:
-		if boost == 0 {
-			return each(func(f string) (index.Query, error) { return index.Prefix(f, v.Prefix), nil })
-		}
-		return each(func(f string) (index.Query, error) {
-			return index.QueryString(fieldClause(f, escapeTerm(v.Prefix)+"*", boost)), nil
-		})
+		return each(func(f string) index.Query { return index.Prefix(f, v.Prefix) }), nil
 	case *query.FuzzyQuery:
 		if v.Prefix != 0 {
 			return nil, notExpressible("a fuzzy query with a fixed prefix length")
 		}
-		return each(func(f string) (index.Query, error) {
-			return index.QueryString(fieldClause(f, fmt.Sprintf("%s~%d", escapeTerm(v.Term), v.Fuzziness), boost)), nil
-		})
+		// A fuzzy term is not analysed, so it is lowercased here, as HEAD does
+		// (patternTerm) at its two NewFuzzyQuery call sites.
+		term := escapeTerm(strings.ToLower(v.Term))
+		return each(func(f string) index.Query {
+			return index.QueryString(fmt.Sprintf("%s:%s~%d", f, term, v.Fuzziness))
+		}), nil
 	case *query.WildcardQuery:
-		if strings.HasPrefix(v.Wildcard, "*") || strings.HasPrefix(v.Wildcard, "?") {
-			return nil, notExpressible("a leading wildcard %q (the engine refuses a scan of the whole term dictionary)", v.Wildcard)
-		}
-		return each(func(f string) (index.Query, error) {
-			return index.QueryString(fieldClause(f, escapeWildcard(v.Wildcard), boost)), nil
-		})
+		// A leading wildcard is allowed and bounded: past the engine's term
+		// cap the search fails with index.ErrTooBroad (see Dispose).
+		return each(func(f string) index.Query { return index.Wildcard(f, v.Wildcard) }), nil
 	case *query.NumericRangeQuery:
 		return numericRange(v)
 	case *query.DateRangeQuery:
@@ -328,34 +379,8 @@ func dateRange(v *query.DateRangeQuery) (index.Query, error) {
 	return index.Range(v.Field(), lo, hi), nil
 }
 
-// termsString renders text as an OR of its boosted terms on field: the
-// boosted form of an analysed match, which index.Match cannot carry (per-field
-// boosts are a seam, switch at the fold).
-func termsString(field, text, _ string, boost float64) index.Query {
-	toks := strings.Fields(text)
-	parts := make([]string, 0, len(toks))
-	for _, t := range toks {
-		parts = append(parts, fieldClause(field, escapeTerm(t), boost))
-	}
-	if len(parts) == 0 {
-		return index.Match(field, text)
-	}
-	return index.QueryString(strings.Join(parts, " "))
-}
-
-func fieldClause(field, body string, boost float64) string {
-	s := field + ":" + body
-	if boost > 0 {
-		s += fmt.Sprintf("^%g", boost)
-	}
-	return s
-}
-
 // escapeTerm escapes a bare query-string term.
 func escapeTerm(s string) string { return escapeWith(s, "+-=&|><!(){}[]^\"~*?:\\/ \t\r\n") }
-
-// escapeWildcard escapes a pattern but keeps its own * and ?.
-func escapeWildcard(s string) string { return escapeWith(s, "+-=&|><!(){}[]^\"~:\\/ \t\r\n") }
 
 // escapePhrase escapes the inside of a quoted phrase.
 func escapePhrase(s string) string { return escapeWith(s, "\"\\") }
