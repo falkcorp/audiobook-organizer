@@ -412,8 +412,8 @@ var _ delugeClient = headDelugeClient{}
 func (h headDelugeClient) ListTorrentDetailsByLabel(label string) ([]delugeclient.TorrentDetail, error) {
 	return h.c.ListTorrentDetailsByLabel(label)
 }
-func (h headDelugeClient) MoveStorage(torrentIDs []string, destPath string) error {
-	return h.c.MoveStorage(torrentIDs, destPath)
+func (h headDelugeClient) MoveStorage(ctx context.Context, torrentIDs []string, destPath string) error {
+	return h.c.MoveStorageContext(ctx, torrentIDs, destPath)
 }
 func (h headDelugeClient) ImportToLibrary(cfg *config.Config, store delugeclient.Store, bookFile *database.BookFile, opts delugeclient.ImportOptions) (string, error) {
 	return delugeclient.ImportToLibraryWith(cfg, h.c, store, bookFile, opts)

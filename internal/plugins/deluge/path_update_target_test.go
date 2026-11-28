@@ -22,7 +22,7 @@ type destMover struct {
 	moves map[string]string // torrent hash -> destination
 }
 
-func (m *destMover) MoveStorage(ids []string, dest string) error {
+func (m *destMover) MoveStorage(_ context.Context, ids []string, dest string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.moves == nil {
@@ -50,6 +50,12 @@ func runTarget(t *testing.T, targetID string, targets map[string]string, m *dest
 	t.Helper()
 	f := newPUFixture()
 	f.versions = f.versions[:1]
+	return runTargetOver(t, f, targetID, targets, m)
+}
+
+// runTargetOver is runTarget over a fixture the caller shaped.
+func runTargetOver(t *testing.T, f *puFixture, targetID string, targets map[string]string, m *destMover) (pathUpdateResult, error) {
+	t.Helper()
 	st := f.store()
 	orig := st.GetBookByIDFunc
 	st.GetBookByIDFunc = func(id string) (*database.Book, error) {
@@ -116,4 +122,31 @@ func TestPathUpdateTarget_NoTargetFollowsTheBooksOwnPath(t *testing.T) {
 	_, err := runTarget(t, "", map[string]string{}, m)
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{h1: "/library/Frank Miller/Dark Knight Returns"}, m.snapshot())
+}
+
+// A book with several Active torrents and a target sends EVERY torrent to the
+// copy's directory, as the base's NotifyDelugeAfterOrganize sent each one to
+// Dir(newPath). The book's .versions/<id> folders are for a book organized in
+// place with several Active versions, and a copy-organize makes none.
+func TestPathUpdateTarget_SeveralActiveTorrentsAllGoToTheTargetsDirectory(t *testing.T) {
+	h1, h2, _ := puHashes()
+	targets := map[string]string{"copy-1": "/gotham/library/batman/dark-knight/part1.m4b"}
+
+	m := &destMover{}
+	res, err := runTargetOver(t, newPUFixture(), "copy-1", targets, m)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, res.Updated)
+	require.Equal(t, map[string]string{
+		h1: "/gotham/library/batman/dark-knight",
+		h2: "/gotham/library/batman/dark-knight",
+	}, m.snapshot())
+
+	// No target keeps the in-place rule: one folder per Active version.
+	m2 := &destMover{}
+	_, err = runTargetOver(t, newPUFixture(), "", map[string]string{}, m2)
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{
+		h1: "/library/Frank Miller/Dark Knight Returns/.versions/v-active-1",
+		h2: "/library/Frank Miller/Dark Knight Returns/.versions/v-active-2",
+	}, m2.snapshot())
 }
