@@ -93,13 +93,20 @@ def main() -> int:
         print(f"already {wanted}: nothing to do")
         return 0
     if env("AORG_OH_DRY") == "1":
-        print(f"dry run only: would run `{cmd}` on {o.host} and wait for {wanted} (nothing was run)")
+        print(
+            f"dry run only: would run `{cmd}` on {o.host} and wait for {wanted} (nothing was run)"
+        )
         return 0
     r = guard.run_remote(o.host, cmd, timeout=CHANGE_TIMEOUT)
     if r.stderr.strip():
-        print("the host said:\n  " + guard.clean(r.stderr).strip().replace("\n", "\n  "), file=sys.stderr)
+        print(
+            "the host said:\n  " + guard.clean(r.stderr).strip().replace("\n", "\n  "),
+            file=sys.stderr,
+        )
     if r.rc != 0:
-        return fail(f"`systemctl {what}` exited {r.rc} on {o.host}; the unit is now {state_of(guard, o)}")
+        return fail(
+            f"`systemctl {what}` exited {r.rc} on {o.host}; the unit is now {state_of(guard, o)}"
+        )
     deadline = time.monotonic() + wait
     while True:
         state = state_of(guard, o)
@@ -107,7 +114,9 @@ def main() -> int:
             print(f"{o.unit} is {wanted}")
             return 0
         if state == "failed" and what == "start":
-            return fail(f"{o.unit} is failed; read its journal on {o.host} (journalctl -u {o.unit})")
+            return fail(
+                f"{o.unit} is failed; read its journal on {o.host} (journalctl -u {o.unit})"
+            )
         if time.monotonic() >= deadline:
             return fail(f"{o.unit} is still {state} after {wait:g} seconds; wanted {wanted}")
         time.sleep(poll)

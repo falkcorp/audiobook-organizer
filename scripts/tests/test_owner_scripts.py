@@ -782,7 +782,9 @@ class ApplyScript(BlockersBase):
                 self.assertEqual(self.box.sudo_calls(), [], label)
         self.assertEqual(self.app_calls(), [])
 
-    def test_a_helper_refusal_before_it_started_takes_back_the_request_this_run_placed(self) -> None:
+    def test_a_helper_refusal_before_it_started_takes_back_the_request_this_run_placed(
+        self,
+    ) -> None:
         host = self.host()
         host.transient_state.write_text("active\n")  # the helper's own view: not inactive
         req = self.request()
@@ -976,10 +978,10 @@ class P6Base(unittest.TestCase):
             PIN=self.pin,
             CONF=str(self.conf),
             REPO=str(self.origin),
-            **self.EXTRA_SUBS(),
+            **self.extra_subs(),
         )
 
-    def EXTRA_SUBS(self) -> dict[str, str]:
+    def extra_subs(self) -> dict[str, str]:
         return {"LIBDIR": str(self.libdir)} if self.SCRIPT == "r2-p6-reinstall.sh" else {}
 
     @property
@@ -1253,7 +1255,11 @@ class UndoScript(P6Base):
 
     def test_a_checkout_that_is_not_the_commit_p6_replaced_is_refused_before_anything(self) -> None:
         for label, sha_, why in (
-            ("another commit's helper", sha(b"# some other bundle\n"), "is not the one installed before P6"),
+            (
+                "another commit's helper",
+                sha(b"# some other bundle\n"),
+                "is not the one installed before P6",
+            ),
             ("no helper was installed", "absent", "no previous bundle to put back"),
         ):
             self.save_before(sha_=sha_)
@@ -1388,7 +1394,10 @@ class ServiceScripts(unittest.TestCase):
         return [ln for ln in self.box.log.read_text().splitlines() if ln.startswith("systemctl")]
 
     def test_it_runs_the_one_granted_command_and_waits_for_the_state(self) -> None:
-        for verb, before, after in (("stop", "active", "inactive"), ("start", "inactive", "active")):
+        for verb, before, after in (
+            ("stop", "active", "inactive"),
+            ("start", "inactive", "active"),
+        ):
             self.box.log.unlink(missing_ok=True)
             self.box.set_state(before)
             p = self.go(verb)
@@ -1516,7 +1525,9 @@ class Hygiene(unittest.TestCase):
             text_ = (OWNER / f"service-{verb}.sh").read_text()
             self.assertEqual(
                 re.findall(r"^\s*sudo\b.*$", text_, re.M),
-                [f'sudo -n "$SYSTEMCTL" {verb} "$UNIT" || fail "systemctl {verb} exited non-zero; $UNIT is now $(active_state)"'],
+                [
+                    f'sudo -n "$SYSTEMCTL" {verb} "$UNIT" || fail "systemctl {verb} exited non-zero; $UNIT is now $(active_state)"'
+                ],
                 verb,
             )
             self.assertIn("SYSTEMCTL=/usr/bin/systemctl", text_)

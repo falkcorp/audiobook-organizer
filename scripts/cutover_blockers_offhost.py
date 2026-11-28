@@ -213,9 +213,7 @@ def pull(guard, host: str, export_dir: str, dest: Path, files: dict) -> tuple[in
     return 0, ""
 
 
-def upload_request(
-    guard, host: str, export_dir: str, path: Path, data: bytes
-) -> tuple[str, str]:
+def upload_request(guard, host: str, export_dir: str, path: Path, data: bytes) -> tuple[str, str]:
     """Put the request on the host under the fixed name, mode 0600, and check it
     there. ("", inode of the placed file) on success, else (why, ""). An
     existing remote request is never replaced."""

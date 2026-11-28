@@ -49,7 +49,11 @@ class ServiceTargets(unittest.TestCase):
         )
 
     def test_start_runs_the_one_granted_command_and_waits_until_active(self) -> None:
-        host = self.host(unit_state("inactive"), unit_state("activating", "start"), unit_state("active", "running"))
+        host = self.host(
+            unit_state("inactive"),
+            unit_state("activating", "start"),
+            unit_state("active", "running"),
+        )
         p = host.make("service-start")
         self.assertEqual(p.returncode, 0, out(p))
         self.assertEqual(self.sudos(host), [START])
@@ -87,7 +91,12 @@ class ServiceTargets(unittest.TestCase):
         for target, now in (("service-stop", "active"), ("service-start", "inactive")):
             host = self.host(
                 unit_state(now),
-                rules=[{"match": r"^sudo -n /usr/bin/systemctl (stop|start) ", "responses": [{"exit": 1}]}],
+                rules=[
+                    {
+                        "match": r"^sudo -n /usr/bin/systemctl (stop|start) ",
+                        "responses": [{"exit": 1}],
+                    }
+                ],
             )
             p = host.make(target)
             self.assertNotEqual(p.returncode, 0, out(p))
