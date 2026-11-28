@@ -8,6 +8,7 @@ package books
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -15,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -350,42 +352,54 @@ func TestInstallRelocationOutbox_FollowsTheRelocationPredicate(t *testing.T) {
 
 // TestRelocationFollowUp_RegisterInstallsOnlyThroughThePredicate: Register's body
 // cannot run without a booted kernel (see TestRelocationFollowUp_RegisterRunsTheWiringCheck),
-// so the call site is pinned from the source: Register calls
-// installRelocationOutbox, and nothing in module.go calls SetRelocationOutbox
-// itself, which would install it outside the predicate.
+// so the call sites are pinned from the source. Register calls
+// installRelocationOutbox, and no other non-test code in this package calls
+// SetRelocationOutbox (which would install the outbox outside the predicate, and
+// make the organize copy stage while the tasks switch is off).
 func TestRelocationFollowUp_RegisterInstallsOnlyThroughThePredicate(t *testing.T) {
-	f, err := parser.ParseFile(token.NewFileSet(), "module.go", nil, 0)
+	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var viaHelper, direct bool
-	for _, d := range f.Decls {
-		fn, ok := d.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
+	var viaHelper bool
+	var strays []string
+	fset := token.NewFileSet()
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			c, ok := n.(*ast.CallExpr)
-			if !ok {
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range f.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				c, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				switch fun := c.Fun.(type) {
+				case *ast.Ident:
+					if fun.Name == "installRelocationOutbox" && name == "module.go" && fn.Name.Name == "Register" && fn.Recv != nil {
+						viaHelper = true
+					}
+				case *ast.SelectorExpr:
+					if fun.Sel.Name == "SetRelocationOutbox" && !(name == "tasks_flip.go" && fn.Name.Name == "installRelocationOutbox") {
+						strays = append(strays, fmt.Sprintf("%s:%d (%s)", name, fset.Position(c.Pos()).Line, fn.Name.Name))
+					}
+				}
 				return true
-			}
-			switch fun := c.Fun.(type) {
-			case *ast.Ident:
-				if fun.Name == "installRelocationOutbox" && fn.Name.Name == "Register" && fn.Recv != nil {
-					viaHelper = true
-				}
-			case *ast.SelectorExpr:
-				if fun.Sel.Name == "SetRelocationOutbox" {
-					direct = true
-				}
-			}
-			return true
-		})
+			})
+		}
 	}
 	if !viaHelper {
 		t.Fatal("booksModule.Register does not call installRelocationOutbox: the relocation outbox would never be installed, and the organize copy's staged arm would never run")
 	}
-	if direct {
-		t.Fatal("module.go calls SetRelocationOutbox itself: the install must go through installRelocationOutbox so the tasks switch gates it")
+	if len(strays) > 0 {
+		t.Fatalf("SetRelocationOutbox is called outside installRelocationOutbox, so the tasks switch does not gate it: %s", strings.Join(strays, ", "))
 	}
 }

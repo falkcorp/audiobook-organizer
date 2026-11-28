@@ -27,8 +27,10 @@ const RelocationConsumerName = "books.deluge.book-relocated"
 // already committed wants the torrent to follow it; the kind's Preview default
 // must never apply to an outbox start (COR2-5).
 //
-// It replaces NotifyDelugeAfterOrganize, which ran after the single-book
-// organize request's copy only. The bulk organize, library clone and
+// With the tasks switch on it replaces NotifyDelugeAfterOrganize, which ran
+// after the single-book organize request's copy only (the request still calls
+// it directly while the switch is off, and the F5-18 switch commit deletes that
+// call). The bulk organize, library clone and
 // metadata-apply copies, every in-place organize and every other write of a
 // book's path moved no torrent before the events flip and move none now: only
 // CreateBookWithRelocation stages the topic. The version-swap and import moves

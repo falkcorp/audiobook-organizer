@@ -2335,9 +2335,10 @@ func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Land
 
 // CreateOrganizedVersionFollowTorrents is CreateOrganizedVersion for the
 // single-book organize request, the one organize flow that moved the original's
-// torrents (NotifyDelugeAfterOrganize, deleted at the events flip, F6-03): the
-// copy's row commits together with the staged follow-up that starts the run
-// moving the original book's Active torrents to the copy's stored path. The
+// torrents (NotifyDelugeAfterOrganize; with the tasks switch on the staged
+// follow-up replaces it, F6-03): the copy's row commits together with the staged
+// follow-up that starts the run moving the original book's Active torrents to
+// the copy's stored path. The
 // bulk organize, library clone and metadata-apply callers use
 // CreateOrganizedVersion and move nothing, as they never did.
 func (orgSvc *Service) CreateOrganizedVersionFollowTorrents(book *database.Book, landing *Landing, operationID string, log logger.Logger) (*database.Book, error) {
